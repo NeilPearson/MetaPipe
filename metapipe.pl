@@ -29,6 +29,7 @@ $| ++;
 # Start with output dir (/out). Presumably, this includes sample name.
 # Begin                     Make /out/reads
 # Dechunk and unzip         (original read location)
+# Run NextClip              replace original read files; no useful information lost (duplication levels output as logs)
 # Run FastQC first time;    make /out/fastqc
 # Trim reads;               make /out/reads/trimmed (or whatever)
 # Run FastQC again;         results in /out/fastqc
