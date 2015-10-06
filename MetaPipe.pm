@@ -649,7 +649,8 @@ sub run_nextclip {
     my $read1file = shift;
     my $read2file = shift;
     my $output_path = shift;
-    my $output_path_slash =~ s!/*$!/!; # Add a trailing slash if none is present
+    my $output_path_slash =$output_path;
+    $output_path_slash =~ s!/*$!/!; # Add a trailing slash if none is present
     my $log_path = $self->{param}{log_path};
     my $queue = $self->{config}{queue};
     my $run_nextclip = $self->{config}{run_nextclip};

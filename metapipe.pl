@@ -245,7 +245,7 @@ my $read2file = $funcs->dechunk_and_unzip(2, $readsfiles);
 # Run NextClip, in order to measure the level of PCR duplicates, and to remove them if called for.
 # Note that $read1file and $read2file continue to hold full path names.
 my $nextclip_path = $funcs->directory_check("$output_prefix/nextclip");
-print "Run NextClip on reads";
+print "Run NextClip on reads\n";
 ($read1file, $read2file) = $funcs->run_nextclip($read1file, $read2file, $nextclip_path);
 
 # Run FastQC (first time); get relevant info out of it
