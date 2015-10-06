@@ -683,11 +683,11 @@ sub run_nextclip {
     my $read1file_out = "$output_path/".basename($read1file);
     my $read2file_out = "$output_path/".basename($read2file);
     print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
-    $bsub = "cat $output_path/results_*_R1.fastq > $read1file_out";
+    $bsub = "bsub -J CatR1 \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
     $r1jobs = `$bsub`;
     $jobs = $self->extract_list_of_jobs($r1jobs);
     $done = $self->done_when_its_done($jobs);
-    $bsub = "cat $output_path/results_*_R2.fastq > $read2file_out";
+    $bsub = "bsub -J CatR2 \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
     $r1jobs = `$bsub`;
     $jobs = $self->extract_list_of_jobs($r1jobs);
     $done = $self->done_when_its_done($jobs);
