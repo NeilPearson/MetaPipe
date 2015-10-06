@@ -4,7 +4,7 @@ use Getopt::Long;
 
 use List::Util qw(shuffle);
 use File::Basename;
-use lib "/usr/users/ga002/pearsonn/Scripts/airseq";
+use lib "/usr/users/ga002/pearsonn/Scripts/MetaPipe";
 use MetaPipe;
 my $funcs = MetaPipe->new();
 use List::Compare;
