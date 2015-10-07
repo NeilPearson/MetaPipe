@@ -331,6 +331,7 @@ sub make_subsamples {
     # Check that they don't overrun number of available reads; react appropriately if they do
     # Store the numbers in $self somewhere
     # Modify list_subset_sizes to simply recall that
+    # Maybe try to also handle the case where no subsetting parameters are supplied at all.
     my %subsample_sizes = ();
     
     # Allow the option of excluding the 'all' setting - but only if no subsample start size is given.
@@ -1166,9 +1167,8 @@ sub run_alignments {
 sub run_blastn {
     my $self = shift;
     my $query = shift;
-    my $alignment_base_dir = $self->{config}{alignment_base_dir};
-    #my $log_path = $self->{param}{log_path};
-    my $log_path = dirname($query);
+    my $alignment_base_dir = $self->{config}{alignment_base_dir};    #my $log_path = $self->{param}{log_path};
+    my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{blastn_database};
     my $sample_id = $self->{param}{sample_id};
     my $queue = $self->{config}{queue};
@@ -1177,6 +1177,9 @@ sub run_blastn {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{blast_memory};
     my $evalue = $self->{config}{blast_evalue};
+    
+    $log_path = $self->directory_check("$log_path/aligners");
+    $log_path = $self->directory_check("$log_path/blastn");
     
     print "Run BLASTn\n";
     $self->does_file_exist($query);
@@ -1201,7 +1204,7 @@ sub run_blastn {
     $queryname =~ s/[^0-9]//g;
     $jobname .= "_$queryname";
     my $command = "blastn -num_threads $threads -db $db -query $query -evalue $evalue -out $outfile";
-    my $bsub = "source blast-$blast_version; bsub -J BLASTN_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/blastn.lsf \"$command\" ";
+    my $bsub = "source blast-$blast_version; bsub -J BLASTN_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/".basename($query).".lsf \"$command\" ";
     print "BLASTN command:\n$bsub\n";
     my $r1jobs = `$bsub`;
 
@@ -1217,8 +1220,7 @@ sub run_blastx {
     my $self = shift;
     my $query = shift;
     my $alignment_base_dir = $self->{config}{alignment_base_dir};
-    #my $log_path = $self->{param}{log_path};
-    my $log_path = dirname($query);
+    my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{blastx_database};
     my $sample_id = $self->{param}{sample_id};
     my $queue = $self->{config}{queue};
@@ -1227,6 +1229,9 @@ sub run_blastx {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{blast_memory};
     my $evalue = $self->{config}{blast_evalue};
+    
+    $log_path = $self->directory_check("$log_path/aligners");
+    $log_path = $self->directory_check("$log_path/blastx");
     
     print "Run BLASTx\n";
     $self->does_file_exist($query);
@@ -1251,7 +1256,7 @@ sub run_blastx {
     $queryname =~ s/[^0-9]//g;
     $jobname .= "_$queryname";
     my $command = "blastx -num_threads $threads -db $db -query $query -evalue $evalue -out $outfile";
-    my $bsub = "source blast-$blast_version; bsub -J BLASTX_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/blastx.lsf \"$command\" ";
+    my $bsub = "source blast-$blast_version; bsub -J BLASTX_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/".basename($query).".lsf \"$command\" ";
     print "BLASTX command:\n$bsub\n";
     my $r1jobs = `$bsub`;
 
@@ -1267,8 +1272,7 @@ sub run_rapsearch {
     my $self = shift;
     my $query = shift;
     my $alignment_base_dir = $self->{config}{alignment_base_dir};
-    #my $log_path = $self->{param}{log_path};
-    my $log_path = dirname($query);
+    my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{rapsearch_database};
     my $sample_id = $self->{param}{sample_id};
     my $queue = $self->{config}{queue};
@@ -1277,6 +1281,9 @@ sub run_rapsearch {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{rapsearch_memory};
     my $evalue = $self->{config}{rapsearch_evalue};
+    
+    $log_path = $self->directory_check("$log_path/aligners");
+    $log_path = $self->directory_check("$log_path/rapsearch");
     
     print "Run RapSearch\n";
     $self->does_file_exist($query);
@@ -1301,7 +1308,7 @@ sub run_rapsearch {
     $queryname =~ s/[^0-9]//g;
     $jobname .= "_$queryname";
     my $command = "rapsearch -q $query -d $db -o $outfile -z $threads -e $evalue";
-    my $bsub = "source rapsearch-$rapsearch_version; bsub -J RapSearch_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/rapsearch.lsf \"$command\" ";
+    my $bsub = "source rapsearch-$rapsearch_version; bsub -J RapSearch_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/".basename($query).".lsf \"$command\" ";
     print "RAPSEARCH command:\n$bsub\n";
     my $r1jobs = `$bsub`;
     
@@ -1319,8 +1326,7 @@ sub run_diamond {
     my $self = shift;
     my $query = shift;
     my $alignment_base_dir = $self->{config}{alignment_base_dir};
-    #my $log_path = $self->{param}{log_path};
-    my $log_path = dirname($query);
+    my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{diamond_database};
     my $sample_id = $self->{param}{sample_id};
     my $queue = $self->{config}{queue};
@@ -1328,6 +1334,9 @@ sub run_diamond {
     my $diamond_version = $self->{config}{diamond_version};
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{diamond_memory};
+    
+    $log_path = $self->directory_check("$log_path/aligners");
+    $log_path = $self->directory_check("$log_path/diamond");
     
     print "Run Diamond\n";
     $self->does_file_exist($query);
@@ -1355,7 +1364,7 @@ sub run_diamond {
     $queryname =~ s/[^0-9]//g;
     $jobname .= "_$queryname";
     my $command = "diamond blastx -d $db -q $query -o $outfile -t $tempdir --threads $threads";
-    my $bsub = "source diamond-$diamond_version; bsub -J Diamond_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/diamond.lsf \"$command\" ";
+    my $bsub = "source diamond-$diamond_version; bsub -J Diamond_$jobname -n $threads -q $queue -R \"rusage[mem=$memory] span[hosts=1]\" -oo $log_path/".basename($query).".lsf \"$command\" ";
     print "DIAMOND command:\n$bsub\n";
     my $r1jobs = `$bsub`;
     
