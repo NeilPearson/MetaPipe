@@ -657,41 +657,66 @@ sub run_nextclip {
     my $run_nextclip = $self->{config}{run_nextclip};
     my $nextclip_version = $self->{config}{nextclip_version};
     my $remove_pcr_duplicates = $self->{config}{remove_pcr_duplicates};
+    my $overwrite = $self->{param}{overwrite};
+    my $halt_at = $self->{param}{halt_at};
+    
+    my $read1file_out = "$output_path/".basename($read1file);
+    my $read2file_out = "$output_path/".basename($read2file);
+    
+    if ($halt_at) {
+        if ($halt_at eq 'nextclip') { die "Pipeline halted at NextClip\n"; }
+    }
     
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
     unless ($run_nextclip eq 'yes') {
         return ($read1file, $read2file);
     }
     
-    # Set up the job
-    my $jobname = basename($self->{param}{output_prefix});
-    my $bsub = "source nextclip-$nextclip_version; bsub -J NextClip_$jobname -q $queue -oo $log_path/nextclip_run_log.lsf \"nextclip -i $read1file -j $read2file -o $output_path_slash"."results \" ";
-    if ($remove_pcr_duplicates eq 'yes') {
-        $bsub .= "--remove_duplicates ";
+    # How can I check if this step has been done already?
+    # Look for output files in the output path, of course.
+    # Check if NextClip files exist. If not, run NextClip; if they do, skip it.
+    my $files = $self->find_files($output_path, "results_[ABCD]_*.fastq");
+    if ((@$files > 0) && (!$overwrite)) {
+        print "--Found NextClip output files\n@$files\nSkipping NextClip!\n";
+    }
+    else {
+        # Set up the job
+        my $jobname = basename($self->{param}{output_prefix});
+        my $bsub = "source nextclip-$nextclip_version; bsub -J NextClip_$jobname -q $queue -oo $log_path/nextclip_run_log.lsf \"nextclip -i $read1file -j $read2file -o $output_path_slash"."results \" ";
+        if ($remove_pcr_duplicates eq 'yes') {
+            $bsub .= "--remove_duplicates ";
+        }
+        
+        # Run it and wait for it to finish
+        print "NextClip command:\n$bsub\n";
+        my $r1jobs = `$bsub`;
+        
+        my $jobs = $self->extract_list_of_jobs($r1jobs);
+        my $done = $self->done_when_its_done($jobs);
+
     }
     
-    # Run it and wait for it to finish
-    print "NextClip command:\n$bsub\n";
-    my $r1jobs = `$bsub`;
+    # Then, after that, check if catted reads files exist. If not, make them; if they do, just set the names as the outputs.
+    $files = $self->find_files($output_path, basename($read1file));
+    push @$files, @{$self->find_files($output_path, basename($read1file))};
+    if ((@$files > 0) && (!$overwrite)) {
+        print "--Found NextClip output files (merged reads, all types - A, B, C, D)\n@$files\nSkipping cat step!\n";
+    }
+    else {
+        # Note on removal of PCR duplicates:
+        # Nextclip dumps all its output into the place specified in the output prefix (obviously). The actual read files are named results_[A,B,C,D]_R[1,2], though. The majority of the reads will usually end up in category D, because we usually won't be doing metagenomics on Nextera long mate pair libraries.
+        # We want all of those reads, so we have to use cat and pipe them off to a single file, or something. Nonetheless, we should then have the full set of reads, minus PCR duplicates. (If we want a specific set of reads pulled out by NextClip in the future, this is the best place to get it).
+        print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
+        my $bsub = "bsub -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
+        my $r1jobs = `$bsub`;
+        my $jobs = $self->extract_list_of_jobs($r1jobs);
+        my $done = $self->done_when_its_done($jobs);
+        $bsub = "bsub -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
+        $r1jobs = `$bsub`;
+        $jobs = $self->extract_list_of_jobs($r1jobs);
+        $done = $self->done_when_its_done($jobs);
+    }
     
-    my $jobs = $self->extract_list_of_jobs($r1jobs);
-    my $done = $self->done_when_its_done($jobs);
-    
-    # Note on removal of PCR duplicates:
-    # Nextclip dumps all its output into the place specified in the output prefix (obviously). The actual read files are named results_[A,B,C,D]_R[1,2], though. The majority of the reads will usually end up in category D, because we usually won't be doing metagenomics on Nextera long mate pair libraries.
-    # We want all of those reads, so we have to use cat and pipe them off to a single file, or something. Nonetheless, we should then have the full set of reads, minus PCR duplicates. (If we want a specific set of reads pulled out by NextClip in the future, this is the best place to get it).
-    # Try to keep the basename of the original input files, just in case anything else needs it.
-    my $read1file_out = "$output_path/".basename($read1file);
-    my $read2file_out = "$output_path/".basename($read2file);
-    print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
-    $bsub = "bsub -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
-    $r1jobs = `$bsub`;
-    $jobs = $self->extract_list_of_jobs($r1jobs);
-    $done = $self->done_when_its_done($jobs);
-    $bsub = "bsub -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
-    $r1jobs = `$bsub`;
-    $jobs = $self->extract_list_of_jobs($r1jobs);
-    $done = $self->done_when_its_done($jobs);
     return ($read1file_out, $read2file_out);
 }
 
@@ -1030,41 +1055,43 @@ sub convert_fastq_to_fasta {
         else { print "--No existing file found; proceeding with FASTQ->FASTA conversion.\n"; }
     }
     
-    #my $bsub = "source fastx_toolkit-$fastx_version; bsub -q $queue -oo $log_path/convert_fasta.lsf \"fastq_to_fasta -Q 33 -n -i $fastq_filepath -o $fasta_filepath\" ";
-    #print "CONVERT FASTQ TO FASTA command:\n$bsub\n";
-    #my $r1jobs = `$bsub`;
-    #
-    #my $jobs = $self->extract_list_of_jobs($r1jobs);
-    ##my $done = $self->done_when_its_done($jobs);
-    #
-    ## Check for errors
-    #
-    #return ($fasta_filepath, $jobs);
+    # Been having some trouble with fastx, but annoying problems with my own fastq>fasta code mean I have to try it again.
+    # This ought to be easy. Come on.
+    my $bsub = "source fastx_toolkit-$fastx_version; bsub -q $queue -oo $log_path/convert_fasta.lsf \"fastq_to_fasta -Q 33 -n -i $fastq_filepath -o $fasta_filepath\" ";
+    print "CONVERT FASTQ TO FASTA command:\n$bsub\n";
+    my $r1jobs = `$bsub`;
+    
+    my $jobs = $self->extract_list_of_jobs($r1jobs);
+    my $done = $self->done_when_its_done($jobs);
+    
+    unless(-e $fasta_filepath) { print "ERROR: Failed to create FASTA file $fasta_filepath\n"; }
+    
     
     # First, count read IDs so we can check the right number were added
     #my $read_ids = $self->get_fastq_read_ids($fastq_filepath);
     #my $number_of_reads = @$read_ids;
     
-    open INFILE, "<", $fastq_filepath or die "ERROR: Could not open fastq file $fastq_filepath: $!\n";
-    open (OUT, ">", $fasta_filepath) or die "ERROR: Cannot open FASTA output file $fasta_filepath: $!\n";
-    my @buffer = ();
-    my $read_count = 0; my $outfile = ();
-    while (my $line = <INFILE>) {
-        chomp $line;
-        # Keep track of previous lines; that will help us keep pace. (Store them in an array, and pop n' push them down).
-        # This is a kind of sliding window approach. When the window can be determined to be in the right place, dump the buffer to the output file.
-        push @buffer, $line;
-        if (@buffer == 4) {
-            my $header = $buffer[0];
-            my $seq = $buffer[1];
-            $header =~ s/^\@/\>/;
-            print OUT "$header\n$seq\n"; 
-            $read_count ++;
-            @buffer = ();
-        }
-    }
-    close INFILE;
-    close OUT;
+    # My own code for this conversion; see comments above.
+    #open INFILE, "<", $fastq_filepath or die "ERROR: Could not open fastq file $fastq_filepath: $!\n";
+    #open (OUT, ">", $fasta_filepath) or die "ERROR: Cannot open FASTA output file $fasta_filepath: $!\n";
+    #my @buffer = ();
+    #my $read_count = 0; my $outfile = ();
+    #while (my $line = <INFILE>) {
+    #    chomp $line;
+    #    # Keep track of previous lines; that will help us keep pace. (Store them in an array, and pop n' push them down).
+    #    # This is a kind of sliding window approach. When the window can be determined to be in the right place, dump the buffer to the output file.
+    #    push @buffer, $line;
+    #    if (@buffer == 4) {
+    #        my $header = $buffer[0];
+    #        my $seq = $buffer[1];
+    #        $header =~ s/^\@/\>/;
+    #        print OUT "$header\n$seq\n"; 
+    #        $read_count ++;
+    #        @buffer = ();
+    #    }
+    #}
+    #close INFILE;
+    #close OUT;
     
     #unless ($read_count == $number_of_reads) {
     #    print "WARN: Number of reads in FASTA file ($read_count) does not match number in input FASTQ! ($number_of_reads)\n";
