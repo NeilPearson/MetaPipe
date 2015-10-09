@@ -660,17 +660,17 @@ sub rechunk {
     my %chunk_files = ();
     open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
     my @buffer = ();    my @output_reads = ();
-    my $read_count = 0; my $outfile = 1;
+    my $read_count = 0; my $outfile = 1;    my $total_read_count = 0;
     while (my $line = <INFILE>) {
         chomp $line;
         push @buffer, $line;
         if (@buffer >= $lines_per_read) {
             push @output_reads, @buffer;
             @buffer = ();
-            $read_count ++;
+            $read_count ++; $total_read_count ++;
             
-            if ($read_count >= $reads_per_chunk) {
-                $chunk_files{"$outfile"."$extension"} = 1;
+            if (($read_count >= $reads_per_chunk) || ($total_read_count == $number_of_reads)) {
+                $chunk_files{"$chunkdir/$outfile"."$extension"} = 1;
                 open (OUT, ">", "$chunkdir/$outfile"."$extension") or die "ERROR: Cannot open reads subsample file $chunkdir/$outfile"."$extension\n"; 
                 foreach my $l (@output_reads) { print OUT "$l\n"; }
                 close OUT;
@@ -1182,42 +1182,44 @@ sub convert_fastq_to_fasta {
     
     # Been having some trouble with fastx, but annoying problems with my own fastq>fasta code mean I have to try it again.
     # This ought to be easy. Come on.
-    my $bsub = "source fastx_toolkit-$fastx_version; bsub -q $queue -oo $log_path/convert_fasta.lsf \"fastq_to_fasta -Q 33 -n -i $fastq_filepath -o $fasta_filepath\" ";
-    print "CONVERT FASTQ TO FASTA command:\n$bsub\n";
-    my $r1jobs = `$bsub`;
+    #my $bsub = "source fastx_toolkit-$fastx_version; bsub -q $queue -oo $log_path/convert_fasta.lsf \"fastq_to_fasta -Q 33 -n -i $fastq_filepath -o $fasta_filepath\" ";
+    #print "CONVERT FASTQ TO FASTA command:\n$bsub\n";
+    #my $r1jobs = `$bsub`;
+    #
+    #my $jobs = $self->extract_list_of_jobs($r1jobs);
+    #my $done = $self->done_when_its_done($jobs);
     
-    my $jobs = $self->extract_list_of_jobs($r1jobs);
-    my $done = $self->done_when_its_done($jobs);
     
+    # My own code for this conversion
+    open INFILE, "<", $fastq_filepath or die "ERROR: Could not open fastq file $fastq_filepath: $!\n";
+    
+    my @buffer = ();    my @output_reads = ();
+    my $read_count = 0; my $outfile = ();
+    while (my $line = <INFILE>) {
+        #chomp $line;
+        # Keep track of previous lines; that will help us keep pace. (Store them in an array, and pop n' push them down).
+        # This is a kind of sliding window approach. When the window can be determined to be in the right place, dump the buffer to the output file.
+        push @buffer, $line;
+        if (@buffer >= 4) {
+            my $header = $buffer[0];
+            my $seq = $buffer[1];
+            $header =~ s/^\@/\>/;
+            #print OUT "$header\n$seq\n";
+            push @output_reads, "$header"."$seq";
+            $read_count ++;
+            @buffer = ();
+        }
+    }
+    close INFILE;
+    
+    open (OUT, ">", $fasta_filepath) or die "ERROR: Cannot open FASTA output file $fasta_filepath: $!\n";
+    foreach my $read (@output_reads) { print OUT "$read"; }
+    close OUT;
+    
+    print "Written ".@output_reads." FASTA reads to file $fasta_filepath\n";
+    
+    $self->remove_trailing_newlines($fasta_filepath);
     unless(-e $fasta_filepath) { print "ERROR: Failed to create FASTA file $fasta_filepath\n"; }
-    
-    
-    # First, count read IDs so we can check the right number were added
-    #my $read_ids = $self->get_fastq_read_ids($fastq_filepath);
-    #my $number_of_reads = @$read_ids;
-    
-    # My own code for this conversion; see comments above.
-    #open INFILE, "<", $fastq_filepath or die "ERROR: Could not open fastq file $fastq_filepath: $!\n";
-    #open (OUT, ">", $fasta_filepath) or die "ERROR: Cannot open FASTA output file $fasta_filepath: $!\n";
-    #my @buffer = ();
-    #my $read_count = 0; my $outfile = ();
-    #while (my $line = <INFILE>) {
-    #    chomp $line;
-    #    # Keep track of previous lines; that will help us keep pace. (Store them in an array, and pop n' push them down).
-    #    # This is a kind of sliding window approach. When the window can be determined to be in the right place, dump the buffer to the output file.
-    #    push @buffer, $line;
-    #    if (@buffer == 4) {
-    #        my $header = $buffer[0];
-    #        my $seq = $buffer[1];
-    #        $header =~ s/^\@/\>/;
-    #        print OUT "$header\n$seq\n"; 
-    #        $read_count ++;
-    #        @buffer = ();
-    #    }
-    #}
-    #close INFILE;
-    #close OUT;
-    
     #unless ($read_count == $number_of_reads) {
     #    print "WARN: Number of reads in FASTA file ($read_count) does not match number in input FASTQ! ($number_of_reads)\n";
     #}
