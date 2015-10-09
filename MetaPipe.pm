@@ -313,20 +313,10 @@ sub make_subsamples {
     
     my %subsample_files = ();
     
-    # Set up the right directories - we want outdir/sample_id
-    #my $sampledir = $self->directory_check("$outdir/$sample_id");
-    
     # Get all the read IDs in the input file
     my $read_ids = $self->get_fastq_read_ids($infile);
     my $number_of_reads = @$read_ids;
-    
-    ## Get the numbers of reads to get in each subsample
-    #my $subset_sizes = $self->list_subset_sizes();
-    #
-    ## Get a max of the number of reads expected to be used across our subsampling regimen.
-    #my $max = max @$subset_sizes;
-    #
-    
+   
     # Set up subsample numbers
     # Check that they don't overrun number of available reads; react appropriately if they do
     # Store the numbers in $self somewhere
@@ -338,9 +328,6 @@ sub make_subsamples {
     if (!$start_size) {
         if (!$exclude_all) { $subsample_sizes{all} = 1; }
     }
-    #else {
-    #    if ($start_size >= $number_of_reads) { push @subsample_sizes, 'all'; }
-    #}
     
     my $subsize = $start_size;
     if ($num_subsamples) {
@@ -456,7 +443,7 @@ sub make_subsamples {
     return \@subsample_files;
 }
 
-sub rechunk {
+sub rechunk_old {
     # This is meant to split read files back up into a set number of subdivisions, after the whole subsetting business has been handled. It will, hopefully, speed up our chronically slow aligners a bit.
     my $self = shift;
     my $readfile = shift;
@@ -576,6 +563,144 @@ sub rechunk {
     
     my @chunk_files = keys %chunk_files;
     return \@chunk_files;
+}
+
+
+
+sub rechunk {
+    # This is meant to split read files back up into a set number of subdivisions, after the whole subsetting business has been handled. It will, hopefully, speed up our chronically slow aligners a bit.
+    # I think I overcomplicated this a bit before, by randomly assigning reads to files. Don't do that; just keep plucking 4 (or 2, if fasta) lines out at a time, and switch the output over whenever necessary.
+    my $self = shift;
+    my $readfile = shift;
+    my $num_chunks = $self->{param}{num_chunks};
+    my $output_prefix = $self->{param}{output_prefix};
+    my $overwrite = $self->{param}{overwrite};
+    
+    # Take care of some stuff to make sure we're getting an accurate, nonsense-free look at the number of reads in the input file.
+    # Adjusting this lets this sub handle either fastq or fasta input. 
+    $self->remove_trailing_newlines($readfile);
+    my $lines_per_read = 4;
+    my ($basename, $parentdir, $extension) = fileparse($readfile, qr/\.[^.]*$/);
+    if ($readfile =~ /\.fasta$/) { $lines_per_read = 2; }
+    
+    # Get number of reads in the file
+    # Choose appropriate division
+    my $number_of_reads = `wc -l $readfile`;
+    $number_of_reads /= $lines_per_read;
+    
+    # Calculate a number; this will help us decide which chunk file each read should go into.
+    # Round up by 1, in order to not get a file at the end with only one or two reads in it.
+    my $reads_per_chunk = int ($number_of_reads / $num_chunks) + 1;
+    
+    # Make the right output directory for the subset file
+    my $dir = dirname($readfile);
+    my $subset = basename($readfile);
+    $subset =~ s/\.fastq//;
+    
+    my $chunkdir = $self->directory_check("$dir/$subset");
+    
+    # First, do a check; do these rechunked files already exist? We want to avoid repeating this is we can help it.
+    # Criteria for skipping:
+    # Must be correct number of rechunked files
+    # All must have the correct number of reads (with a bit of variance)
+    my $pattern = "*.$extension*";
+    my $existing_chunk_files = $self->find_files($chunkdir,$pattern);
+    
+    print "Rechunking check: can we skip this step?\n";
+    # $overwrite must not be set...
+    unless ($overwrite) {
+        print "  Overwrite not requested\n";
+        # Files must exist...
+        unless ($existing_chunk_files->[0] =~ /No such file or directory/) {
+            print "  Files exist in output dir\n";
+            # Number of files must match...
+            if (@$existing_chunk_files == $num_chunks) {
+                
+                # Number of reads must match...
+                # Check them all
+                my $num_reads_is_fine = 1;
+                foreach my $file (@$existing_chunk_files) {
+                    my $number_of_subset_reads =  `wc -l $file`;
+                    $number_of_subset_reads /= $lines_per_read;
+                    # Bear in mind that the last read file in the set will most likely have fewer reads.
+                    # Give a pass if we're on the last file and the number of subset reads equals total number of reads modulus number of chunks.
+                    unless (($number_of_subset_reads == $reads_per_chunk) || ((basename($file) eq "$num_chunks.fasta") && ($number_of_subset_reads == ($number_of_reads % $num_chunks)))) {
+                        $num_reads_is_fine = 0;
+                        print "    File $file has wrong number of reads! ($number_of_subset_reads vs. $reads_per_chunk)\n";
+                    }
+                }
+                
+                # If that's all OK, feel free to skip.
+                if ($num_reads_is_fine == 1) {
+                    my @chunk_files = ();
+                    foreach my $i (1..$num_chunks) {
+                        push @chunk_files, "$chunkdir/$i.fastq";
+                    }
+                    return \@chunk_files;
+                }
+            }
+            else { print "  Incorrect number of files in $chunkdir\n  (".@$existing_chunk_files." vs. $num_chunks)\n"; }
+        }
+        else { print "  No files exist in directory $chunkdir\n"; }
+    }
+    else { print "  Overwrite requested\n"; }
+    
+    # There is a minor complication here. Since this sub adds data to files mostly through appending, we should avoid writing to files that already exist.
+    # That can be achieved simply by deleting the chunks directory and recreating it every time.
+    if ($subset) {
+        if (-d "$dir/$subset") { `rm -r $dir/$subset`; }
+    }
+    $chunkdir = $self->directory_check("$dir/$subset");
+    
+    
+    # Now, I need to pick out the reads from the input file, and direct them to an output file.
+    # These are potentially very big files, so they should be read line by line. That would need a little read buffer type thing, since we want
+    # chunks of 4 lines at a time.
+    # Make sure to store the names of the chunk files created, so that they can be passed back. 
+    my %chunk_files = ();
+    open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
+    my @buffer = ();    my @output_reads = ();
+    my $read_count = 0; my $outfile = 1;
+    while (my $line = <INFILE>) {
+        chomp $line;
+        push @buffer, $line;
+        if (@buffer >= $lines_per_read) {
+            push @output_reads, @buffer;
+            @buffer = ();
+            $read_count ++;
+            
+            if ($read_count >= $reads_per_chunk) {
+                $chunk_files{"$outfile.$extension"} = 1;
+                open (OUT, ">", "$chunkdir/$outfile.$extension") or die "ERROR: Cannot open reads subsample file $chunkdir/$outfile.$extension\n"; 
+                foreach my $l (@output_reads) { print OUT "$l\n"; }
+                close OUT;
+                @output_reads = ();
+                $outfile ++;
+                $read_count = 0;
+            }
+        }
+    }
+    close INFILE;
+    
+    my @chunk_files = keys %chunk_files;
+    $self->remove_trailing_newlines(\@chunk_files);
+    return \@chunk_files;
+}
+
+sub remove_trailing_newlines {
+    # A useful thing to be able to do when relying on the number of lines being useful information.
+    # Make it so this can take an array of files too.
+    my $self = shift;
+    my $file = shift;
+    
+    my @files = ();
+    if (ref $file eq 'ARRAY') { @files = @$file; }
+    else                      { push @files, $file; }
+    
+    foreach my $f (@files) {
+        my $gibberish = '/./,$!d;/^\n*$/{$d;N;};/\n$/ba';
+        `sed -e :a -e '$gibberish' $f`;
+    }
 }
 
 sub extract_list_of_jobs {

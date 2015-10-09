@@ -244,7 +244,8 @@ my $read2file = $funcs->dechunk_and_unzip(2, $readsfiles);
 
 # Run NextClip, in order to measure the level of PCR duplicates, and to remove them if called for.
 # Note that $read1file and $read2file continue to hold full path names.
-my $nextclip_path = $funcs->directory_check("$output_prefix/nextclip");
+$funcs->directory_check("$output_prefix/reads");
+my $nextclip_path = $funcs->directory_check("$output_prefix/reads/nextclip");
 print "Run NextClip on reads\n";
 ($read1file, $read2file) = $funcs->run_nextclip($read1file, $read2file, $nextclip_path);
 
@@ -272,7 +273,6 @@ $funcs->examine_fastqc_results($fastqcfileR2, $trimming_done);
 #ÊTrim the reads 
 # Use trimmomatic. It's a bit of a complex call by the look of it, but I can handle it.
 my $threads = 4;
-$funcs->directory_check("$output_prefix/reads");
 my $trimming_data_dir = $funcs->directory_check("$output_prefix/reads/trimmed_fastq");
 print "Run trimming on input data\n";
 my ($read1file_trimmed, $read2file_trimmed) = $funcs->run_trimming($read1file, $read2file, $trimming_data_dir);
