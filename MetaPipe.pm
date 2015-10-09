@@ -603,7 +603,7 @@ sub rechunk {
     # Criteria for skipping:
     # Must be correct number of rechunked files
     # All must have the correct number of reads (with a bit of variance)
-    my $pattern = "*.$extension*";
+    my $pattern = "*$extension*";
     my $existing_chunk_files = $self->find_files($chunkdir,$pattern);
     
     print "Rechunking check: can we skip this step?\n";
@@ -670,8 +670,8 @@ sub rechunk {
             $read_count ++;
             
             if ($read_count >= $reads_per_chunk) {
-                $chunk_files{"$outfile.$extension"} = 1;
-                open (OUT, ">", "$chunkdir/$outfile.$extension") or die "ERROR: Cannot open reads subsample file $chunkdir/$outfile.$extension\n"; 
+                $chunk_files{"$outfile"."$extension"} = 1;
+                open (OUT, ">", "$chunkdir/$outfile"."$extension") or die "ERROR: Cannot open reads subsample file $chunkdir/$outfile"."$extension\n"; 
                 foreach my $l (@output_reads) { print OUT "$l\n"; }
                 close OUT;
                 @output_reads = ();
@@ -757,8 +757,8 @@ sub done_when_its_done {
         # No point checking ten billion times per minute.
         if (@intersection >= 1) {
             if ($checks <= 10)    { sleep 5; }
-            elsif ($checks <= 20) { sleep 15; }
-            else                  { sleep 30; }
+            elsif ($checks <= 20) { sleep 10; }
+            else                  { sleep 15; }
         }
     }
     until (@intersection == 0);
