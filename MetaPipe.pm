@@ -301,6 +301,7 @@ sub make_subsamples {
     my $self = shift;
     my $start_size = $self->{param}{sub_start_size};
     my $step_size = $self->{param}{sub_step};
+    if (!$step_size) { $step_size = 0; }
     my $num_subsamples = $self->{param}{sub_num};
     my $exclude_all = $self->{param}{exclude_all};
     my $overwrite = $self->{param}{overwrite};
@@ -331,6 +332,7 @@ sub make_subsamples {
     
     my $subsize = $start_size;
     if ($num_subsamples) {
+        # If a number of subsamples is set ($start_size will also be set), we want multiple subsamples, stepping up by $step_size each time.
         for (1..$num_subsamples) {
             if ($subsize < $number_of_reads) { $subsample_sizes{$subsize} = 1; }
             else {
@@ -341,11 +343,16 @@ sub make_subsamples {
         }
     }
     elsif ($start_size) {
+        # If number of subsamples is not set, we want a single subsample of $start_size. 
         if ($subsize < $number_of_reads) { $subsample_sizes{$subsize} = 1; }
         else {
             $subsample_sizes{all} = 1;
             print "WARN: Not enough reads to meet planned subsampling scheme!\n  Proposed sample:\t$subsize\n  Available:\t$number_of_reads\n";
         }
+    }
+    else {
+        # If neither are set, we want all reads, regardless of size.
+        $subsample_sizes{all} = 1;
     }
     
     my @subset_sizes = keys %subsample_sizes;
