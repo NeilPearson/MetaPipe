@@ -230,6 +230,8 @@ my $readsfiles = $funcs->find_files($datadir, $pattern);
 if ($readsfiles->[0] =~ /No such file or directory/) {
     die "ERROR: Cannot find read files in directory\n  $datadir\n";
 }
+# Remove *.gz.md5 files from the list
+@$readsfiles = grep(!/.fastq.gz.md5/, @$readsfiles);
 print "Found ".@$readsfiles." input files:\n";
 foreach my $infile (@$readsfiles) { print "$infile"; }
 
