@@ -168,75 +168,94 @@ sub directory_check {
 
 sub dechunk_and_unzip {
     my $self = shift;
-    my $read = $_[0];
-    my $files = $_[1];
+    
+    my $files = $_[0];
+    my $read = $_[1];
     my $readfile = ();
     
-    # Be aware that the correct file may already exist, amongst a set of chunked and/or compressed files.
-    # Try to pick it out, if possible, before going any further.
-    my @readfiles = ();
-    FILE: foreach my $file (@$files) {
-        chomp $file;
-        if ($file =~ /_R$read\.fastq$/) { $readfile = $file; last FILE;  }
-        elsif ($file =~ /_R$read\_[0-9]+\.fastq/) { push @readfiles, $file; }
+    # OK, time to use some recursion in anger again.
+    # I want to pass all my reads files in here, whether they're paired end or not. I want this to be able to figure it out.
+    # As such, I won't pass in read numbers initially (at least, in some cases). If no filter input ($read) is set, I'll check the
+    # config option that tells us if this is a paired end or single end run, and recursively call this sub with the correct filters.
+    if ($read) {
+        # Be aware that the correct file may already exist, amongst a set of chunked and/or compressed files.
+        # Try to pick it out, if possible, before going any further.
+        my @readfiles = ();
+        FILE: foreach my $file (@$files) {
+            chomp $file;
+            if ($file =~ /_R$read\.fastq$/) { $readfile = $file; last FILE;  }
+            elsif ($file =~ /_R$read\_[0-9]+\.fastq/) { push @readfiles, $file; }
+        }
+        
+        # At this point, the correct file may already have been positively ID'd - so we only need carry on with this other stuff if it hasn't.
+        if (!$readfile) {
+            if (@readfiles == 0) {
+                die "ERROR: Cannot find Read $read data\n";
+            }
+            elsif (@readfiles == 1) {
+                $readfile = $readfiles[0];
+                chomp $readfile;
+                # Is it compressed?
+                if ($readfile =~ /fastq\.gz$/) {
+                    $readfile =~ s/fastq\.gz/fastq/;
+                    # Unzip it. See if I can keep the compressed version (use -c)
+                    # I don't think this needs to be bsubbed - this script itself should be bsubbed.
+                    `gunzip -c $readfile.gz 1> $readfile`;
+                }
+            }
+            else {
+                # Unlike with a single file, an output filename has to be assembled here. It should match the rest, but without the chunk number.
+                # To get that, split the first thing in the list on _, remove numbers from the last part, and re-join.
+                # For real thoroughness, I ought to check all files, but this will work well enough for now. 
+                $readfile = $readfiles[0];
+                chomp $readfile;
+                my @parts = split /_/, $readfile;
+                my $end = pop @parts;   # The end of the reads name includes the extension as well as the chunk number
+                $end =~ s/[0-9]+//g;
+                $parts[-1] .= $end;
+                $readfile = join '_', @parts;
+                $readfile =~ s/fastq\.gz/fastq/;
+                
+                # One thing to double-check: does the file we're after already exist?
+                # There's no point re-extracting data if it already exists. 
+                unless (-e $readfile) {
+                    # Check if these files are compressed or not; it determines what we do with them.
+                    # If decompressing, we should only put compressed files in the list.
+                    my $compressed = 0;
+                    my @compressed_files = ();
+                    foreach my $file (@readfiles) {
+                        if ($file =~ /fastq\.gz/) { $compressed = 1; push @compressed_files, $file; }
+                    }
+                    
+                    # If compressed, feed all files (restricted to compressed files) to gunzip -c; if not, use cat.
+                    my $call = ();
+                    if ($compressed == 1) { $call = "gunzip -c "; @readfiles = @compressed_files; }
+                    else                  { $call = "cat "; }
+                    
+                    foreach my $file (@readfiles) {
+                        chomp $file;
+                        $call .= "$file ";
+                    }
+                    $call .= "1> $readfile";
+                    print "Join chunked files:\n$call\n-----\n";
+                    `$call`;
+                }
+            }
+        }
+        return $readfile;
+    }
+    else {
+        # Do the recursive thing I describe above
+        my $r1files = $self->dechunk_and_unzip($files, 1);
+        if ($self->{config}{reads_type} eq 'paired end') {
+            my $r2files = $self->dechunk_and_unzip($files, 2);
+            push @$r1files, @$r2files;
+        }
+        return $r1files;
     }
     
-    # At this point, the correct file may already have been positively ID'd - so we only need carry on with this other stuff if it hasn't.
-    if (!$readfile) {
-        if (@readfiles == 0) {
-            die "ERROR: Cannot find Read $read data\n";
-        }
-        elsif (@readfiles == 1) {
-            $readfile = $readfiles[0];
-            chomp $readfile;
-            # Is it compressed?
-            if ($readfile =~ /fastq\.gz$/) {
-                $readfile =~ s/fastq\.gz/fastq/;
-                # Unzip it. See if I can keep the compressed version (use -c)
-                # I don't think this needs to be bsubbed - this script itself should be bsubbed.
-                `gunzip -c $readfile.gz 1> $readfile`;
-            }
-        }
-        else {
-            # Unlike with a single file, an output filename has to be assembled here. It should match the rest, but without the chunk number.
-            # To get that, split the first thing in the list on _, remove numbers from the last part, and re-join.
-            # For real thoroughness, I ought to check all files, but this will work well enough for now. 
-            $readfile = $readfiles[0];
-            chomp $readfile;
-            my @parts = split /_/, $readfile;
-            my $end = pop @parts;   # The end of the reads name includes the extension as well as the chunk number
-            $end =~ s/[0-9]+//g;
-            $parts[-1] .= $end;
-            $readfile = join '_', @parts;
-            $readfile =~ s/fastq\.gz/fastq/;
-            
-            # One thing to double-check: does the file we're after already exist?
-            # There's no point re-extracting data if it already exists. 
-            unless (-e $readfile) {
-                # Check if these files are compressed or not; it determines what we do with them.
-                # If decompressing, we should only put compressed files in the list.
-                my $compressed = 0;
-                my @compressed_files = ();
-                foreach my $file (@readfiles) {
-                    if ($file =~ /fastq\.gz/) { $compressed = 1; push @compressed_files, $file; }
-                }
-                
-                # If compressed, feed all files (restricted to compressed files) to gunzip -c; if not, use cat.
-                my $call = ();
-                if ($compressed == 1) { $call = "gunzip -c "; @readfiles = @compressed_files; }
-                else                  { $call = "cat "; }
-                
-                foreach my $file (@readfiles) {
-                    chomp $file;
-                    $call .= "$file ";
-                }
-                $call .= "1> $readfile";
-                print "Join chunked files:\n$call\n-----\n";
-                `$call`;
-            }
-        }
-    }
-    return $readfile;
+    
+    
 }
 
 sub list_subset_sizes {
@@ -450,130 +469,6 @@ sub make_subsamples {
     return \@subsample_files;
 }
 
-sub rechunk_old {
-    # This is meant to split read files back up into a set number of subdivisions, after the whole subsetting business has been handled. It will, hopefully, speed up our chronically slow aligners a bit.
-    my $self = shift;
-    my $readfile = shift;
-    my $num_chunks = $self->{param}{num_chunks};
-    my $output_prefix = $self->{param}{output_prefix};
-    my $overwrite = $self->{param}{overwrite};
-    
-    # Get number of reads in the file
-    my $read_ids = $self->get_fastq_read_ids($readfile);
-    my $number_of_reads = @$read_ids;
-    
-    # Calculate a number; this will help us decide which chunk file each read should go into
-    my $reads_per_chunk = int ($number_of_reads / $num_chunks);
-    
-    # Make the right output directory for the subset file
-    my $dir = dirname($readfile);
-    my $subset = basename($readfile);
-    $subset =~ s/\.fastq//;
-    
-    my $chunkdir = $self->directory_check("$dir/$subset");
-    
-    # First, do a check; do these rechunked files already exist? We want to avoid repeating this is we can help it.
-    # Criteria for skipping:
-    # Must be correct number of rechunked files
-    # All must have the correct number of reads (with a bit of variance)
-    my $pattern = '*.fastq*';
-    my $existing_chunk_files = $self->find_files($chunkdir,$pattern);
-    
-    print "Rechunking check: can we skip this step?\n";
-    # $overwrite must not be set...
-    unless ($overwrite) {
-        print "  Overwrite not requested\n";
-        # Files must exist...
-        unless ($existing_chunk_files->[0] =~ /No such file or directory/) {
-            print "  Files exist in output dir\n";
-            # Number of files must match...
-            if (@$existing_chunk_files == $num_chunks) {
-                
-                # Number of reads must (roughly) match...
-                # Check them all
-                my $var = int ($reads_per_chunk / 100);
-                my $num_reads_is_fine = 1;
-                foreach my $file (@$existing_chunk_files) {
-                    my $read_ids = $self->get_fastq_read_ids($file);
-                    my $number_of_subset_reads = @$read_ids;
-                    unless (($number_of_subset_reads <= $reads_per_chunk + $var) && ($number_of_subset_reads >= $reads_per_chunk - $var)) {
-                        $num_reads_is_fine = 0;
-                        print "    File $file has wrong number of reads! ($number_of_subset_reads vs. ".($reads_per_chunk - $var)."-".($reads_per_chunk + $var).")\n";
-                    }
-                }
-                
-                # If that's all OK, feel free to skip.
-                if ($num_reads_is_fine == 1) {
-                    my @chunk_files = ();
-                    foreach my $i (1..$num_chunks) {
-                        push @chunk_files, "$chunkdir/$i.fastq";
-                    }
-                    return \@chunk_files;
-                }
-            }
-            else { print "  Incorrect number of files in $chunkdir\n  (".@$existing_chunk_files." vs. $num_chunks)\n"; }
-        }
-        else { print "  No files exist in directory $chunkdir\n"; }
-    }
-    else { print "  Overwrite requested\n"; }
-    
-    # There is a minor complication here. Since this sub adds data to files mostly through appending, we should avoid writing to files that already exist.
-    # That can be achieved simply by deleting the chunks directory and recreating it every time.
-    if ($subset) {
-        if (-d "$dir/$subset") { `rm -r $dir/$subset`; }
-    }
-    $chunkdir = $self->directory_check("$dir/$subset");
-    
-    
-    # Now, I need to pick out the reads from the input file, assign them to a chunk file, and direct them there.
-    # These are potentially very big files, so they should be read line by line. That would need a little read buffer type thing, since we want
-    # chunks of 4 lines at a time.
-    # Make sure to store the names of the chunk files created, so that they can be passed back. 
-    my %chunk_files = ();
-    open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
-    my @buffer = ();
-    my $store_lines = 0;    my $read_count = 0; my $outfile = ();
-    while (my $line = <INFILE>) {
-        chomp $line;
-        # If line is a read ID, and has been assigned to a subsample, prepare to store it
-        if ($line =~ /^\@.*:.*:.*:.*:.*:.*:.*/) {
-            my $read_id = $line;
-            chomp $read_id;
-            $store_lines = 1;
-            push @buffer, $line;
-            
-            # This works out which chunk to assign this read to. It will split the file up pretty much evenly.
-            # I increment $chunk because it will be inted down to 0 at first. The unless condition stops $chunk going to $num_chunks + 1 at the last read.
-            my $chunk = int($read_count / $reads_per_chunk);
-            $chunk ++;
-            if ($chunk > $num_chunks) { $chunk = $num_chunks; }
-            
-            $outfile = "$chunkdir/$chunk.fastq";
-            $chunk_files{$outfile} = 1;
-        }
-        elsif ($store_lines == 1) {
-            push @buffer, $line;
-            if (@buffer >= 4) {
-                # If 4 lines have built up in the buffer, write them out to the right file and clear the buffer and counter
-                if (-e $outfile) { open (OUT, ">>", $outfile) or die "ERROR: Cannot open reads subsample file $outfile\n"; }
-                else             { open (OUT, ">", $outfile) or die "ERROR: Cannot open reads subsample file $outfile\n"; }
-                foreach my $l (@buffer) { print OUT "$l\n"; }
-                close OUT;
-                
-                $store_lines = 0;
-                @buffer = ();
-                $read_count ++;
-            }
-        }
-    }
-    close INFILE;
-    
-    my @chunk_files = keys %chunk_files;
-    return \@chunk_files;
-}
-
-
-
 sub rechunk {
     # This is meant to split read files back up into a set number of subdivisions, after the whole subsetting business has been handled. It will, hopefully, speed up our chronically slow aligners a bit.
     # I think I overcomplicated this a bit before, by randomly assigning reads to files. Don't do that; just keep plucking 4 (or 2, if fasta) lines out at a time, and switch the output over whenever necessary.
@@ -779,8 +674,7 @@ sub done_when_its_done {
 
 sub run_nextclip {
     my $self = shift;
-    my $read1file = shift;
-    my $read2file = shift;
+    my $readsfiles = shift;
     my $output_path = shift;
     my $output_path_slash =$output_path;
     $output_path_slash =~ s!/*$!/!; # Add a trailing slash if none is present
@@ -792,8 +686,10 @@ sub run_nextclip {
     my $overwrite = $self->{param}{overwrite};
     my $halt_at = $self->{param}{halt_at};
     
-    my $read1file_out = "$output_path/".basename($read1file);
-    my $read2file_out = "$output_path/".basename($read2file);
+    my $readsfiles_out = ();
+    foreach my $in (@$readsfiles) {
+        push @$readsfiles_out, "$output_path/".basename($in);
+    }
     
     if ($halt_at) {
         if ($halt_at eq 'nextclip') { die "Pipeline halted at NextClip\n"; }
@@ -801,61 +697,123 @@ sub run_nextclip {
     
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
     unless ($run_nextclip eq 'yes') {
-        return ($read1file, $read2file);
+        return $readsfiles;
     }
     
-    # How can I check if this step has been done already?
-    # Look for output files in the output path, of course.
-    # Check if NextClip files exist. If not, run NextClip; if they do, skip it.
-    my $files = $self->find_files($output_path, "results_[ABCD]_*.fastq");
-    if ((@$files > 0) && (!$overwrite)) {
-        print "--Found NextClip output files\n@$files\nSkipping NextClip!\n";
+    # We may have a single-end run, which nextclip can't handle. That means we have to do something else.
+    if ($self->{config}{reads_type} eq 'single end') {
+        print "This is a single-end run, so NextClip cannot be run.\n";
+        # If the user has requested removal of PCR duplicates, then we need to run another sub that can do it.
+        # Otherwise, we just need to return a warning, pass the filepath back, and continue merrily on our way.
+        if ($remove_pcr_duplicates eq 'yes') {
+            print " -Removing PCR duplicates manually\n";
+            $self->remove_pcr_duplicates();
+        }
+        else {
+            print " -No further action taken\n";
+        }
     }
     else {
-        # Set up the job
-        my $jobname = basename($self->{param}{output_prefix});
-        my $bsub = "source nextclip-$nextclip_version; bsub -J NextClip_$jobname -q $queue -oo $log_path/nextclip_run_log.lsf \"nextclip -i $read1file -j $read2file -o $output_path_slash"."results \" ";
-        if ($remove_pcr_duplicates eq 'yes') {
-            $bsub .= "--remove_duplicates ";
+        # Got to pick out the read 1 and 2 files from the inputs. (I put them in in this order, for definite)
+        my $read1file = $readsfiles->[0];
+        my $read2file = $readsfiles->[1];
+        my $read1file_out = $readsfiles_out->[0];
+        my $read2file_out = $readsfiles_out->[1];
+        
+        # How can I check if this step has been done already?
+        # Look for output files in the output path, of course.
+        # Check if NextClip files exist. If not, run NextClip; if they do, skip it.
+        my $files = $self->find_files($output_path, "results_[ABCD]_*.fastq");
+        if ((@$files > 0) && (!$overwrite)) {
+            print "--Found NextClip output files\n@$files\nSkipping NextClip!\n";
+        }
+        else {
+            # Set up the job
+            my $jobname = basename($self->{param}{output_prefix});
+            my $bsub = "source nextclip-$nextclip_version; bsub -J NextClip_$jobname -q $queue -oo $log_path/nextclip_run_log.lsf \"nextclip -i $read1file -j $read2file -o $output_path_slash"."results \" ";
+            if ($remove_pcr_duplicates eq 'yes') {
+                $bsub .= "--remove_duplicates ";
+            }
+            
+            # Run it and wait for it to finish
+            print "NextClip command:\n$bsub\n";
+            my $r1jobs = `$bsub`;
+            
+            my $jobs = $self->extract_list_of_jobs($r1jobs);
+            my $done = $self->done_when_its_done($jobs);
+    
         }
         
-        # Run it and wait for it to finish
-        print "NextClip command:\n$bsub\n";
-        my $r1jobs = `$bsub`;
-        
-        my $jobs = $self->extract_list_of_jobs($r1jobs);
-        my $done = $self->done_when_its_done($jobs);
+        # Then, after that, check if catted reads files exist. If not, make them; if they do, just set the names as the outputs.
+        $files = $self->find_files($output_path, basename($read1file));
+        push @$files, @{$self->find_files($output_path, basename($read1file))};
+        if ((@$files > 0) && (!$overwrite)) {
+            print "--Found NextClip output files (merged reads, all types - A, B, C, D)\n@$files\nSkipping cat step!\n";
+        }
+        else {
+            # Note on removal of PCR duplicates:
+            # Nextclip dumps all its output into the place specified in the output prefix (obviously). The actual read files are named results_[A,B,C,D]_R[1,2], though. The majority of the reads will usually end up in category D, because we usually won't be doing metagenomics on Nextera long mate pair libraries.
+            # We want all of those reads, so we have to use cat and pipe them off to a single file, or something. Nonetheless, we should then have the full set of reads, minus PCR duplicates. (If we want a specific set of reads pulled out by NextClip in the future, this is the best place to get it).
+            print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
+            my $bsub = "bsub -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
+            my $r1jobs = `$bsub`;
+            my $jobs = $self->extract_list_of_jobs($r1jobs);
+            my $done = $self->done_when_its_done($jobs);
+            $bsub = "bsub -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
+            $r1jobs = `$bsub`;
+            $jobs = $self->extract_list_of_jobs($r1jobs);
+            $done = $self->done_when_its_done($jobs);
+        }
+    }
+    return $readsfiles_out;
+}
 
-    }
+sub remove_pcr_duplicates {
+    my $self = shift;
+    my $file = shift;
+    my $output_prefix = $self->{param}{output_prefix};
     
-    # Then, after that, check if catted reads files exist. If not, make them; if they do, just set the names as the outputs.
-    $files = $self->find_files($output_path, basename($read1file));
-    push @$files, @{$self->find_files($output_path, basename($read1file))};
-    if ((@$files > 0) && (!$overwrite)) {
-        print "--Found NextClip output files (merged reads, all types - A, B, C, D)\n@$files\nSkipping cat step!\n";
-    }
-    else {
-        # Note on removal of PCR duplicates:
-        # Nextclip dumps all its output into the place specified in the output prefix (obviously). The actual read files are named results_[A,B,C,D]_R[1,2], though. The majority of the reads will usually end up in category D, because we usually won't be doing metagenomics on Nextera long mate pair libraries.
-        # We want all of those reads, so we have to use cat and pipe them off to a single file, or something. Nonetheless, we should then have the full set of reads, minus PCR duplicates. (If we want a specific set of reads pulled out by NextClip in the future, this is the best place to get it).
-        print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
-        my $bsub = "bsub -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
-        my $r1jobs = `$bsub`;
-        my $jobs = $self->extract_list_of_jobs($r1jobs);
-        my $done = $self->done_when_its_done($jobs);
-        $bsub = "bsub -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
-        $r1jobs = `$bsub`;
-        $jobs = $self->extract_list_of_jobs($r1jobs);
-        $done = $self->done_when_its_done($jobs);
-    }
+    my $lines_per_read = 4;
+    my ($basename, $parentdir, $extension) = fileparse($file, qr/\.[^.]*$/);
+    if ($extension =~ /\.fasta$/) { $lines_per_read = 2; }
     
-    return ($read1file_out, $read2file_out);
+    # I want to keep the output of this read separate, so I need to make an output directory.
+    my $output_dir = $self->directory_check("$output_prefix/pcr_duplicate_removal");
+    my $outfile = "$output_dir/$basename"."$extension";
+    
+    # I can cobble together something to do this from code I already wrote, I reckon.
+    # Read the file.
+    # Use a hash to keep track of reads that we've already seen.
+    # Write the data only if it's novel.
+    open INFILE, "<", $file or die "ERROR: Could not open file $file: $!\n";
+    my @buffer = ();    my %seen_reads = ();    my @output_reads = ();
+    while (my $line = <INFILE>) {
+        chomp $line;
+        push @buffer, $line;
+        if (@buffer >= $lines_per_read) {
+            # Check if a hash exists for the sequence line
+            # If not, write it, and set a value in the corresponding hash.
+            my $seq = $buffer[1];
+            if (!$seen_reads{$seq}) {
+                push @output_reads, @buffer;
+                $seen_reads{$seq} = 1;
+            }
+            @buffer = ();
+        }
+    }
+    close INFILE;
+    
+    open (OUT, ">", $outfile) or die "ERROR: Cannot open output file $outfile\n"; 
+    foreach my $l (@output_reads) { print OUT "$l\n"; }
+    close OUT;
+    
+    $self->remove_trailing_newlines($outfile);
+    return $outfile;
 }
 
 sub run_fastqc {
     my $self = shift;
-    my $read1file = shift;
-    my $read2file = shift;
+    my $readsfiles = shift;
     my $output_path = shift;
     my $log_path = $self->{param}{log_path};
     my $queue = $self->{config}{queue};
@@ -867,86 +825,84 @@ sub run_fastqc {
         if ($halt_at eq 'fastqc') { die "Pipeline halted at FastQC\n"; }
     }
     
-    my $fastqcfileR1 = basename($read1file);
-    $fastqcfileR1 =~ s/\.fastq/_fastqc\.zip/g;
-    my $fastqcfileR2 = basename($read2file);
-    $fastqcfileR2 =~ s/\.fastq/_fastqc\.zip/g;
-    
-    # How can I check if this step has been done already?
-    # Look for output files in the output path, of course.
-    unless ($overwrite) {
-        my $files = $self->find_files($output_path, '*fastqc.html');
-        if (@$files > 0) {
-            print "--Found FastQC files\n@$files\nSkipping FastQC!\n";
-            return  ("$output_path/$fastqcfileR1", "$output_path/$fastqcfileR2");
+    my $outfiles = ();
+    READS: foreach my $readfile (@$readsfiles) {
+        my $fastqcfile = basename($readfile);
+        $fastqcfile =~ s/\.fastq/_fastqc\.zip/g;
+        
+        # How can I check if this step has been done already?
+        # Look for output files in the output path, of course.
+        unless ($overwrite) {
+            my $files = $self->find_files($output_path, '*fastqc.html');
+            if (@$files > 0) {
+                print "--Found FastQC files\n@$files\nSkipping FastQC!\n";
+                push @$outfiles, "$output_path/$fastqcfile";
+                next READS;
+            }
+            else { print "--No existing file found; proceeding with FastQC.\n"; }
         }
-        else { print "--No existing file found; proceeding with trimming.\n"; }
+        
+        my $jobname = basename($self->{param}{output_prefix});
+        my $bsub = "source fastqc-$fastqc_version; bsub -J FastQC_$jobname -q $queue -oo $log_path/fastqc_R1.lsf \"fastqc $readfile --outdir $output_path\" ";
+        print "FASTQC command:\n$bsub\n";
+        my $r1jobs = `$bsub`;
+        
+        my $jobs = $self->extract_list_of_jobs($r1jobs);
+        my $done = $self->done_when_its_done($jobs);
+        push @$outfiles, "$output_path/$fastqcfile"
     }
     
-    my $jobname = basename($self->{param}{output_prefix});
-    my $bsub = "source fastqc-$fastqc_version; bsub -J FastQC_$jobname -q $queue -oo $log_path/fastqc_R1.lsf \"fastqc $read1file --outdir $output_path\" ";
-    print "FASTQC commands:\n$bsub\n";
-    my $r1jobs = `$bsub`;
-    my $r2jobs = $r1jobs;
-    $bsub = "source fastqc-0.11.2; bsub -q $queue -oo $log_path/fastqc_R2.lsf \"fastqc $read2file --outdir $output_path\" ";
-    print "$bsub\n";
-    $r2jobs .= `$bsub`;
-    # (That concatenates all the jobs into a single string)
-    
-    my $jobs = $self->extract_list_of_jobs($r2jobs);
-    my $done = $self->done_when_its_done($jobs);
-    
-    # Check for errors
-    
-    return ("$output_path/$fastqcfileR1", "$output_path/$fastqcfileR2");
+    return ($outfiles);
 }
 
 sub examine_fastqc_results {
     my $self = shift;
-    my $fastqc_results_file = shift;
+    my $fastqc_results_files = shift;
     my $trimming_done = shift;
     
-    # Unzip $fastqc_results_file
-    # Read fastqc_data.txt in directory created from that
-    # Locate the adapter content section of that file
-    # Prepare warnings, if necessary, based on what's in there
-    my $fastqc_results_dir = $self->unzip_fastqc_results($fastqc_results_file);
-    
-    # Get the name of that directory (it'll be used for printing output to the user)
-    my @dirsplit = split /\//, $fastqc_results_dir;
-    my $results_dirname = $dirsplit[-1];
-    
-    open(RESULTS, "<", "$fastqc_results_dir/fastqc_data.txt") or die "ERROR: Cannot open unzipped FastQC data\n$fastqc_results_dir/fastqc_data.txt\n";
-    my @data = <RESULTS>;
-    close RESULTS;
-    
-    my $line = ();
-    do {
-        $line = shift @data;
-    }
-    until ($line =~ /Adapter Content/);
-    chomp $line;
-    my @linesplit = split /\t/, $line;
-    my $test_status = $linesplit[1];
-    chomp $test_status;
-    if ($test_status =~ /pass/) {
-        print "FastQC test: adapter content for dataset $results_dirname OK\n";
-    }
-    else {
-        if ($trimming_done) {
-            # If trimming has been done and adapter content is still too high, throw a big wobbly.
-            print "ERROR: Adapter content too high after trimming in dataset $results_dirname!\n";
-            print "$line\n";
-            my $ac_section = ();
-            do {
-                $ac_section = shift @data;
-                print $ac_section;
-            }
-            until ($ac_section =~ /END_MODULE/);
+    foreach my $fastqc_results_file (@$fastqc_results_files) {
+        # Unzip $fastqc_results_file
+        # Read fastqc_data.txt in directory created from that
+        # Locate the adapter content section of that file
+        # Prepare warnings, if necessary, based on what's in there
+        my $fastqc_results_dir = $self->unzip_fastqc_results($fastqc_results_file);
+        
+        # Get the name of that directory (it'll be used for printing output to the user)
+        my @dirsplit = split /\//, $fastqc_results_dir;
+        my $results_dirname = $dirsplit[-1];
+        
+        open(RESULTS, "<", "$fastqc_results_dir/fastqc_data.txt") or die "ERROR: Cannot open unzipped FastQC data\n$fastqc_results_dir/fastqc_data.txt\n";
+        my @data = <RESULTS>;
+        close RESULTS;
+        
+        my $line = ();
+        do {
+            $line = shift @data;
+        }
+        until ($line =~ /Adapter Content/);
+        chomp $line;
+        my @linesplit = split /\t/, $line;
+        my $test_status = $linesplit[1];
+        chomp $test_status;
+        if ($test_status =~ /pass/) {
+            print "FastQC test: adapter content for dataset $results_dirname OK\n";
         }
         else {
-            # If trimming hasn't been done, throw a minor warning.
-            print "WARN: Adapter content too high (before trimming) in dataset $results_dirname\n";
+            if ($trimming_done) {
+                # If trimming has been done and adapter content is still too high, throw a big wobbly.
+                print "ERROR: Adapter content too high after trimming in dataset $results_dirname!\n";
+                print "$line\n";
+                my $ac_section = ();
+                do {
+                    $ac_section = shift @data;
+                    print $ac_section;
+                }
+                until ($ac_section =~ /END_MODULE/);
+            }
+            else {
+                # If trimming hasn't been done, throw a minor warning.
+                print "WARN: Adapter content too high (before trimming) in dataset $results_dirname\n";
+            }
         }
     }
 }
@@ -983,8 +939,7 @@ sub unzip_fastqc_results {
 
 sub run_trimming {
     my $self = shift;
-    my $read1file = shift;
-    my $read2file = shift;
+    my $readsfiles = shift;
     my $run_trimming = $self->{config}{run_trimming};
     my $log_path = $self->{param}{log_path};
     my $queue = $self->{config}{queue};
@@ -1000,59 +955,75 @@ sub run_trimming {
     my $overwrite = $self->{param}{overwrite};
     my $halt_at = $self->{param}{halt_at};
     my $memory = $self->{config}{trimming_memory};
+    my $readtype = $self->{param}{reads_type};
     
     if ($halt_at) {
         if ($halt_at eq 'trimming') { die "Pipeline halted at trimming\n"; }
     }
     
-    $self->does_file_exist($read1file);
-    $self->does_file_exist($read2file);
+    unless ($run_trimming =~ /yes/) {
+        print "    Config file requests no trimming; skipping this step\n";
+        return $readsfiles;
+    }
     
-    my ($read1file_trimmed, $read2file_trimmed) = ();
-    if ($run_trimming =~ /yes/) {
-        $read1file_trimmed = "$trimming_output_path/".basename($read1file);
-        $read2file_trimmed = "$trimming_output_path/".basename($read2file);
-        $read1file_trimmed =~ s/\.fastq/_trimmed.fastq/;
-        $read2file_trimmed =~ s/\.fastq/_trimmed.fastq/;
-        
-        my $read1file_trimmed_single = $read1file_trimmed;
-        my $read2file_trimmed_single = $read2file_trimmed;
-        $read1file_trimmed_single =~ s/\.fastq/_single.fastq/;
-        $read2file_trimmed_single =~ s/\.fastq/_single.fastq/;
-        
-        unless ($overwrite) {
-            if ((-e $read1file_trimmed) && (-e $read2file_trimmed)) {
-                print "--Found \n$read1file_trimmed \nand \n$read2file_trimmed\nSkipping trimming!\n";
-                return ($read1file_trimmed, $read2file_trimmed);
-            }
-            else { print "--No existing file found; proceeding with trimming.\n"; }
+    foreach my $readfile (@$readsfiles) {
+        $self->does_file_exist($readfile);
+    }
+    
+    # Trimmomatic actually uses somewhat different commands for paired-end and single-end runs, so I'll just have to arrange it into
+    # different code blocks.
+    my $outfiles = ();
+    my ($readsfiles_trimmed, $readsfiles_trimmed_single) = ();
+    foreach my $readfile (@$readsfiles) {
+        my $readfile_trimmed = "$trimming_output_path/".basename($readfile);
+        push @$readsfiles_trimmed, $readfile_trimmed;
+        my $readfile_trimmed_single = $readfile_trimmed;
+        $readfile_trimmed_single =~ s/\.fastq/_single.fastq/;
+        push @$readsfiles_trimmed_single, $readfile_trimmed;
+        push @$outfiles, $readfile_trimmed;
+    }
+    
+    unless ($overwrite) {
+        my $exists = 1;
+        foreach my $file (@$readsfiles_trimmed) {
+            unless (-e $file) { $exists = 0; }
+        }
+        if ($exists == 1) {
+            print "--Found all expected trimming output files.\nSkipping trimming!\n";
+            return $readsfiles_trimmed;
         }
         
-        my $hot_air = "-R \"rusage[mem=$memory] span[hosts=1]\"";
-        # I don't know what the :2:30:10 bit after $adaptersfile does, but it seems to be important.
-        my $jobname = basename($self->{param}{output_prefix});
-        my $bsub = "source trimmomatic-$trimmomatic_version; bsub -J Trimming_$jobname -q $queue -oo $log_path/trim.lsf $hot_air -n $threads \"java -jar /tgac/software/testing/trimmomatic/0.30/x86_64/bin/trimmomatic-0.30.jar PE -phred33 -threads $threads $read1file $read2file $read1file_trimmed $read1file_trimmed_single $read2file_trimmed $read2file_trimmed_single ILLUMINACLIP:$adaptersfile:$seed_mismatches:$palindrome_clip_threshold:$simple_clip_threshold SLIDINGWINDOW:$trimming_sliding_window MINLEN:$trimming_min_length\" ";
-        print "TRIMMOMATIC command:\n$bsub\n";
-        my $r1jobs = `$bsub`;
-        
-        my $jobs = $self->extract_list_of_jobs($r1jobs);
-        my $done = $self->done_when_its_done($jobs);
-        
-        # Check for errors
-    }
-    else {
-        print "    Config file requests no trimming; skipping this step\n";
-        $read1file_trimmed = $read1file;
-        $read2file_trimmed = $read2file;
+        else { print "--No existing file found; proceeding with trimming.\n"; }
     }
     
-    return ($read1file_trimmed, $read2file_trimmed);
+    my $hot_air = "-R \"rusage[mem=$memory] span[hosts=1]\"";
+    
+    my $jobname = basename($self->{param}{output_prefix});
+    
+    # Due to the slightly different commands used for single-end and paired-end runs, this command will need a bit of perl's magic at
+    # string handling.
+    my $bsub = "source trimmomatic-$trimmomatic_version; bsub -J Trimming_$jobname -q $queue -oo $log_path/trim.lsf $hot_air -n $threads \"java -jar /tgac/software/testing/trimmomatic/0.30/x86_64/bin/trimmomatic-0.30.jar";
+    if ($readtype eq 'paired end') { $bsub .= " PE"; }
+    else                           { $bsub .= " SE"; }
+    $bsub .= " -phred33 -threads $threads";
+    foreach my $readfile (@$readsfiles) { $bsub .= " $readfile"; }
+    foreach my $i (1..@$readsfiles) { $i --; $bsub .= " ".$readsfiles_trimmed->[$i]." ".$readsfiles_trimmed_single->[$i]; }
+    # I don't know what the :2:30:10 bit after $adaptersfile does, but it seems to be important.
+    # (It's a bunch of trimming parameters).
+    $bsub .= " ILLUMINACLIP:$adaptersfile:$seed_mismatches:$palindrome_clip_threshold:$simple_clip_threshold SLIDINGWINDOW:$trimming_sliding_window MINLEN:$trimming_min_length\" ";
+    
+    print "TRIMMOMATIC command:\n$bsub\n";
+    my $r1jobs = `$bsub`;
+    
+    my $jobs = $self->extract_list_of_jobs($r1jobs);
+    my $done = $self->done_when_its_done($jobs);
+    
+    return $outfiles;
 }
 
 sub run_kontaminant {
     my $self = shift;
-    my $read1file = shift;
-    my $read2file = shift;
+    my $readsfiles = shift;
     my $filtering_output_dir = shift;
     my $reference = shift;
     my $run_filtering = $self->{config}{run_filtering};
@@ -1070,15 +1041,18 @@ sub run_kontaminant {
         if ($halt_at eq 'filtering') { die "Pipeline halted at filtering\n"; }
     }
     
-    $self->does_file_exist($read1file);
-    $self->does_file_exist($read2file);
+    foreach my $readfile (@$readsfiles) {
+        $self->does_file_exist($readfile);
+    }
     
+    my $outfiles = ();
     my ($r1outfile, $r2outfile) = ();
     if ($run_filtering =~ /yes/) {
         $self->directory_check("$log_path/kontaminant");
         
-        $r1outfile = "$filtering_output_dir/filtered_".basename($read1file);
-        $r2outfile = "$filtering_output_dir/filtered_".basename($read2file);
+        foreach my $readfile (@$readsfiles) {
+            push @$outfiles, "$filtering_output_dir/filtered_".basename($readfile);
+        }
         
         unless ($overwrite) {
             if ((-e $r1outfile) && (-e $r2outfile)) {
@@ -1089,28 +1063,32 @@ sub run_kontaminant {
         }
         
         my $jobname = basename($self->{param}{output_prefix});
-        my $bsub = "source kontaminant-$kontaminant_version; bsub -J Filter_$jobname -R \"rusage[mem=$memory]\" -q $queue -oo $log_path/kontaminant.lsf \"kontaminant -f -1 $read1file -2 $read2file -c $reference -d $database -k 21 -o $filtering_output_dir/filtered_ -r $filtering_output_dir/removed_ -p $log_path/kontaminant -n $mem_height -b $mem_width\" ";
+        my $bsub = "source kontaminant-$kontaminant_version; bsub -J Filter_$jobname -R \"rusage[mem=$memory]\" -q $queue -oo $log_path/kontaminant.lsf \"kontaminant -f";
+        my $c = 0;
+        foreach my $readfile (@$readsfiles) {
+            $c++;
+            $bsub .= " -$c $readfile";
+        }
+        $bsub .= " -c $reference -d $database -k 21 -o $filtering_output_dir/filtered_ -r $filtering_output_dir/removed_ -p $log_path/kontaminant -n $mem_height -b $mem_width\" ";
         print "KONTAMINANT command:\n$bsub\n";
         my $r1jobs = `$bsub`;
         
         my $jobs = $self->extract_list_of_jobs($r1jobs);
         my $done = $self->done_when_its_done($jobs);
-        
-        # Check for errors
     }
     else {
         print "    Config file requests no filtering; skipping this step\n";
-        $r1outfile = $read1file;
-        $r2outfile = $read2file;
+        foreach my $readfile (@$readsfiles) {
+            push @$outfiles, $readfile;
+        }
     }
     
-    return ($r1outfile, $r2outfile);
+    return $outfiles;
 }
 
 sub run_flash {
     my $self = shift;
-    my $read1file = shift;
-    my $read2file = shift;
+    my $readsfiles = shift;
     my $output_dir = shift;
     my $output_file = shift;
     my $log_path = $self->{param}{log_path};
@@ -1118,11 +1096,20 @@ sub run_flash {
     my $flash_version = $self->{config}{flash_version};
     my $overwrite = $self->{param}{overwrite};
     my $halt_at = $self->{param}{halt_at};
+    my $readstype = $self->{param}{reads_type};
     
     if ($halt_at) {
         if ($halt_at eq 'flash') { die "Pipeline halted at FLASH\n"; }
     }
     
+    # If running on single-end data, we can't (and don't need to) use flash.
+    if ($readstype eq 'single end') {
+        print "FLASH is unnecessary for single-end runs.\n";
+        return $readsfiles;
+    }
+    
+    my $read1file = $readsfiles->[0];
+    my $read2file = $readsfiles->[1];
     $self->does_file_exist($read1file);
     $self->does_file_exist($read2file);
     

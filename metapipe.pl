@@ -235,21 +235,28 @@ if ($readsfiles->[0] =~ /No such file or directory/) {
 print "Found ".@$readsfiles." input files:\n";
 foreach my $infile (@$readsfiles) { print "$infile"; }
 
+# Is this a single-end or paired-end run? It makes a slight difference to some of the initial steps, so we need to check.
+my $pe = 0;
+foreach my $file (@$readsfiles) {
+    if ($file =~ /R2.fastq/) { $pe = 1; }
+}
+if ($pe == 1) { $funcs->{config}{reads_type} = "paired end"; }
+else          { $funcs->{config}{reads_type} = "single end"; }
+
 # Determine what needs to be done to get a single, unzipped file for reads 1 and 2 (and then do it).
 # NOTE: Both of these hold the complete path from root.
-# ANOTHER NOTE: Going to assume for the moment that we're doing paired end only.
 print "Dechunk and unzip input files\n";
-my $read1file = $funcs->dechunk_and_unzip(1, $readsfiles);
-my $read2file = $funcs->dechunk_and_unzip(2, $readsfiles);
+$readsfiles = $funcs->dechunk_and_unzip($readsfiles);
 # For the moment, we can leave these unzipped/dechunked read files where they are. But later, we create several different sets -
 # fasta format, flashed, filtered, subsampled, etc - that ought to go in the output directory somewhere. 
+
 
 # Run NextClip, in order to measure the level of PCR duplicates, and to remove them if called for.
 # Note that $read1file and $read2file continue to hold full path names.
 $funcs->directory_check("$output_prefix/reads");
 my $nextclip_path = $funcs->directory_check("$output_prefix/reads/nextclip");
 print "Run NextClip on reads\n";
-($read1file, $read2file) = $funcs->run_nextclip($read1file, $read2file, $nextclip_path);
+$readsfiles = $funcs->run_nextclip($readsfiles, $nextclip_path);
 
 # Run FastQC (first time); get relevant info out of it
 # Run FastQC (and the other stuff) from in here, rather than via Richard's shell scripts. It's more flexible, not to mention easily maintainable, if I do it here.
@@ -260,48 +267,45 @@ print "Run NextClip on reads\n";
 $funcs->directory_check("$output_prefix/fastqc");
 my $fastqc_firstpass_path = $funcs->directory_check("$output_prefix/fastqc/untrimmed");
 
-
-# Because I'm bsubbing jobs (to take advantage of our cluster's opportunities for parallelisation) I need to copy my waiting sub in.
+# Because I'm bsubbing jobs (to take advantage of our cluster's opportunities for parallelisation) I need to use the sub that waits for jobs to complete.
 # That gets a job ID and waits for it to complete before cintinuing with the script. Without it, we'll charge ahead to stuff wer're not ready for.
 print "Run FastQC on unmodified input files\n";
-my ($fastqcfileR1, $fastqcfileR2) = $funcs->run_fastqc($read1file, $read2file, $fastqc_firstpass_path);
+my $fastqcfiles = $funcs->run_fastqc($readsfiles, $fastqc_firstpass_path);
 
 # Look at those FastQC results; determine appropriate action
 # (Amounts to throwing a minor warning, at most, at this stage)
 my $trimming_done = ();
-$funcs->examine_fastqc_results($fastqcfileR1, $trimming_done);
-$funcs->examine_fastqc_results($fastqcfileR2, $trimming_done);
+$funcs->examine_fastqc_results($fastqcfiles, $trimming_done);
 
 #ÊTrim the reads 
 # Use trimmomatic. It's a bit of a complex call by the look of it, but I can handle it.
 my $threads = 4;
 my $trimming_data_dir = $funcs->directory_check("$output_prefix/reads/trimmed_fastq");
 print "Run trimming on input data\n";
-my ($read1file_trimmed, $read2file_trimmed) = $funcs->run_trimming($read1file, $read2file, $trimming_data_dir);
+$readsfiles = $funcs->run_trimming($readsfiles, $trimming_data_dir);
 
 # Re-run FastQC, to check adapters have been removed.
 # (That is, if trimming has been specified!)
 if ($funcs->{config}{run_trimming} =~ /yes/) {
     my $fastqc_secondpass_path = $funcs->directory_check("$output_prefix/fastqc/trimmed");
     print "Run FastQC again on trimmed data\n";
-    ($fastqcfileR1, $fastqcfileR2) = $funcs->run_fastqc($read1file_trimmed, $read2file_trimmed, $fastqc_secondpass_path);
+    $fastqcfiles = $funcs->run_fastqc($readsfiles, $fastqc_secondpass_path);
     
     # Look at those second FastQC results; determine appropriate action
     $trimming_done = 1;
-    $funcs->examine_fastqc_results($fastqcfileR1, $trimming_done);
-    $funcs->examine_fastqc_results($fastqcfileR2, $trimming_done);
+    $funcs->examine_fastqc_results($fastqcfiles, $trimming_done);
 }
 
 # Run kontaminant - remove human reads
 my $filtering_data_dir = $funcs->directory_check("$output_prefix/reads/human_filtered_fastq");
 print "Run kontaminant on trimmed reads\n";
-my ($read1file_filtered, $read2file_filtered) = $funcs->run_kontaminant($read1file_trimmed, $read2file_trimmed, $filtering_data_dir, $funcs->{config}{human_reference});
+my ($read1file_filtered, $read2file_filtered) = $funcs->run_kontaminant($readsfiles, $filtering_data_dir, $funcs->{config}{human_reference});
 
 # Run FLASH - join overlapping paired-end reads into single reads
 my $flashed_data_dir = $funcs->directory_check("$output_prefix/reads/flashed_fastq");
 my $readsfile_flashed = "flashed_reads"; # Note: Not quite the complete filename; no extension. FLASH adds one.
 print "Run FLASH on filtered reads\n";
-$readsfile_flashed = $funcs->run_flash($read1file_filtered, $read2file_filtered, $flashed_data_dir, $readsfile_flashed);
+$readsfile_flashed = $funcs->run_flash($readsfiles, $flashed_data_dir, $readsfile_flashed);
 print "Flashed reads file:\n$readsfile_flashed\n";
 
 # Subsampling
