@@ -152,6 +152,16 @@ sub does_file_exist {
     }
 }
 
+sub halt {
+    my $self = shift;
+    my $step = shift;
+    my $halt_at = $self->{param}{halt_at};
+    
+    if ($halt_at) {
+        if ($halt_at eq $step) { die "Pipeline halted at $step\n"; }
+    }
+}
+
 sub directory_check {
     # Checks if a directory exists; tries to make it if not; halts the program if it can't make it.
     my $self = shift;
@@ -684,30 +694,25 @@ sub run_nextclip {
     my $nextclip_version = $self->{config}{nextclip_version};
     my $remove_pcr_duplicates = $self->{config}{remove_pcr_duplicates};
     my $overwrite = $self->{param}{overwrite};
-    my $halt_at = $self->{param}{halt_at};
     
     my $readsfiles_out = ();
     foreach my $in (@$readsfiles) {
         push @$readsfiles_out, "$output_path/".basename($in);
     }
     
-    if ($halt_at) {
-        if ($halt_at eq 'nextclip') { die "Pipeline halted at NextClip\n"; }
-    }
-    
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
-    unless ($run_nextclip eq 'yes') {
-        return $readsfiles;
+    if ($run_nextclip eq 'no') {
+        push @$readsfiles_out, @$readsfiles;
     }
-    
     # We may have a single-end run, which nextclip can't handle. That means we have to do something else.
-    if ($self->{config}{reads_type} eq 'single end') {
+    elsif ($self->{config}{reads_type} eq 'single end') {
         print "This is a single-end run, so NextClip cannot be run.\n";
         # If the user has requested removal of PCR duplicates, then we need to run another sub that can do it.
         # Otherwise, we just need to return a warning, pass the filepath back, and continue merrily on our way.
         if ($remove_pcr_duplicates eq 'yes') {
             print " -Removing PCR duplicates manually\n";
-            $self->remove_pcr_duplicates();
+            my $outfile = $self->remove_pcr_duplicates();
+            push @$readsfiles_out, $outfile;
         }
         else {
             print " -No further action taken\n";
@@ -765,6 +770,8 @@ sub run_nextclip {
             $done = $self->done_when_its_done($jobs);
         }
     }
+    
+    $self->halt('nextclip');
     return $readsfiles_out;
 }
 
@@ -819,11 +826,6 @@ sub run_fastqc {
     my $queue = $self->{config}{queue};
     my $fastqc_version = $self->{config}{fastqc_version};
     my $overwrite = $self->{param}{overwrite};
-    my $halt_at = $self->{param}{halt_at};
-    
-    if ($halt_at) {
-        if ($halt_at eq 'fastqc') { die "Pipeline halted at FastQC\n"; }
-    }
     
     my $outfiles = ();
     READS: foreach my $readfile (@$readsfiles) {
@@ -852,6 +854,7 @@ sub run_fastqc {
         push @$outfiles, "$output_path/$fastqcfile"
     }
     
+    $self->halt('fastqc');
     return ($outfiles);
 }
 
@@ -953,71 +956,70 @@ sub run_trimming {
     my $trimming_output_path = shift;
     my $trimmomatic_version = $self->{config}{trimmomatic_version};
     my $overwrite = $self->{param}{overwrite};
-    my $halt_at = $self->{param}{halt_at};
     my $memory = $self->{config}{trimming_memory};
     my $readtype = $self->{param}{reads_type};
     
-    if ($halt_at) {
-        if ($halt_at eq 'trimming') { die "Pipeline halted at trimming\n"; }
-    }
-    
-    unless ($run_trimming =~ /yes/) {
-        print "    Config file requests no trimming; skipping this step\n";
-        return $readsfiles;
-    }
-    
-    foreach my $readfile (@$readsfiles) {
-        $self->does_file_exist($readfile);
-    }
-    
-    # Trimmomatic actually uses somewhat different commands for paired-end and single-end runs, so I'll just have to arrange it into
-    # different code blocks.
     my $outfiles = ();
-    my ($readsfiles_trimmed, $readsfiles_trimmed_single) = ();
-    foreach my $readfile (@$readsfiles) {
-        my $readfile_trimmed = "$trimming_output_path/".basename($readfile);
-        push @$readsfiles_trimmed, $readfile_trimmed;
-        my $readfile_trimmed_single = $readfile_trimmed;
-        $readfile_trimmed_single =~ s/\.fastq/_single.fastq/;
-        push @$readsfiles_trimmed_single, $readfile_trimmed;
-        push @$outfiles, $readfile_trimmed;
+    if ($run_trimming eq 'no') {
+        print "    Config file requests no trimming; skipping this step\n";
+        push @$outfiles, @$readsfiles;
     }
-    
-    unless ($overwrite) {
-        my $exists = 1;
-        foreach my $file (@$readsfiles_trimmed) {
-            unless (-e $file) { $exists = 0; }
-        }
-        if ($exists == 1) {
-            print "--Found all expected trimming output files.\nSkipping trimming!\n";
-            return $readsfiles_trimmed;
+    else {
+        foreach my $readfile (@$readsfiles) {
+            $self->does_file_exist($readfile);
         }
         
-        else { print "--No existing file found; proceeding with trimming.\n"; }
+        # Trimmomatic actually uses somewhat different commands for paired-end and single-end runs, so I'll just have to arrange it into
+        # different code blocks.
+        
+        my ($readsfiles_trimmed, $readsfiles_trimmed_single) = ();
+        foreach my $readfile (@$readsfiles) {
+            my $readfile_trimmed = "$trimming_output_path/".basename($readfile);
+            push @$readsfiles_trimmed, $readfile_trimmed;
+            my $readfile_trimmed_single = $readfile_trimmed;
+            $readfile_trimmed_single =~ s/\.fastq/_single.fastq/;
+            push @$readsfiles_trimmed_single, $readfile_trimmed;
+            push @$outfiles, $readfile_trimmed;
+        }
+        
+        unless ($overwrite) {
+            my $exists = 1;
+            foreach my $file (@$readsfiles_trimmed) {
+                unless (-e $file) { $exists = 0; }
+            }
+            if ($exists == 1) {
+                print "--Found all expected trimming output files.\nSkipping trimming!\n";
+               $self->halt('trimming');
+                return $readsfiles_trimmed;
+            }
+            
+            else { print "--No existing file found; proceeding with trimming.\n"; }
+        }
+        
+        my $hot_air = "-R \"rusage[mem=$memory] span[hosts=1]\"";
+        
+        my $jobname = basename($self->{param}{output_prefix});
+        
+        # Due to the slightly different commands used for single-end and paired-end runs, this command will need a bit of perl's magic at
+        # string handling.
+        my $bsub = "source trimmomatic-$trimmomatic_version; bsub -J Trimming_$jobname -q $queue -oo $log_path/trim.lsf $hot_air -n $threads \"java -jar /tgac/software/testing/trimmomatic/0.30/x86_64/bin/trimmomatic-0.30.jar";
+        if ($readtype eq 'paired end') { $bsub .= " PE"; }
+        else                           { $bsub .= " SE"; }
+        $bsub .= " -phred33 -threads $threads";
+        foreach my $readfile (@$readsfiles) { $bsub .= " $readfile"; }
+        foreach my $i (1..@$readsfiles) { $i --; $bsub .= " ".$readsfiles_trimmed->[$i]." ".$readsfiles_trimmed_single->[$i]; }
+        # I don't know what the :2:30:10 bit after $adaptersfile does, but it seems to be important.
+        # (It's a bunch of trimming parameters).
+        $bsub .= " ILLUMINACLIP:$adaptersfile:$seed_mismatches:$palindrome_clip_threshold:$simple_clip_threshold SLIDINGWINDOW:$trimming_sliding_window MINLEN:$trimming_min_length\" ";
+        
+        print "TRIMMOMATIC command:\n$bsub\n";
+        my $r1jobs = `$bsub`;
+        
+        my $jobs = $self->extract_list_of_jobs($r1jobs);
+        my $done = $self->done_when_its_done($jobs);
     }
     
-    my $hot_air = "-R \"rusage[mem=$memory] span[hosts=1]\"";
-    
-    my $jobname = basename($self->{param}{output_prefix});
-    
-    # Due to the slightly different commands used for single-end and paired-end runs, this command will need a bit of perl's magic at
-    # string handling.
-    my $bsub = "source trimmomatic-$trimmomatic_version; bsub -J Trimming_$jobname -q $queue -oo $log_path/trim.lsf $hot_air -n $threads \"java -jar /tgac/software/testing/trimmomatic/0.30/x86_64/bin/trimmomatic-0.30.jar";
-    if ($readtype eq 'paired end') { $bsub .= " PE"; }
-    else                           { $bsub .= " SE"; }
-    $bsub .= " -phred33 -threads $threads";
-    foreach my $readfile (@$readsfiles) { $bsub .= " $readfile"; }
-    foreach my $i (1..@$readsfiles) { $i --; $bsub .= " ".$readsfiles_trimmed->[$i]." ".$readsfiles_trimmed_single->[$i]; }
-    # I don't know what the :2:30:10 bit after $adaptersfile does, but it seems to be important.
-    # (It's a bunch of trimming parameters).
-    $bsub .= " ILLUMINACLIP:$adaptersfile:$seed_mismatches:$palindrome_clip_threshold:$simple_clip_threshold SLIDINGWINDOW:$trimming_sliding_window MINLEN:$trimming_min_length\" ";
-    
-    print "TRIMMOMATIC command:\n$bsub\n";
-    my $r1jobs = `$bsub`;
-    
-    my $jobs = $self->extract_list_of_jobs($r1jobs);
-    my $done = $self->done_when_its_done($jobs);
-    
+    $self->halt('trimming');
     return $outfiles;
 }
 
@@ -1032,14 +1034,9 @@ sub run_kontaminant {
     my $queue = $self->{config}{queue};
     my $kontaminant_version = $self->{config}{kontaminant_version};
     my $overwrite = $self->{param}{overwrite};
-    my $halt_at = $self->{param}{halt_at};
     my $mem_width = $self->{config}{kontaminant_mem_width};
     my $mem_height = $self->{config}{kontaminant_mem_height};
     my $memory = $self->{config}{filtering_memory};
-    
-    if ($halt_at) {
-        if ($halt_at eq 'filtering') { die "Pipeline halted at filtering\n"; }
-    }
     
     foreach my $readfile (@$readsfiles) {
         $self->does_file_exist($readfile);
@@ -1057,6 +1054,7 @@ sub run_kontaminant {
         unless ($overwrite) {
             if ((-e $r1outfile) && (-e $r2outfile)) {
                 print "--Found \n$r1outfile \nand \n$r2outfile\nSkipping filtering!\n";
+                $self->halt('kontaminant');
                 return ($r1outfile, $r2outfile);
             }
             else { print "--No existing file found; proceeding with filtering.\n"; }
@@ -1083,6 +1081,7 @@ sub run_kontaminant {
         }
     }
     
+    $self->halt('kontaminant');
     return $outfiles;
 }
 
@@ -1095,12 +1094,7 @@ sub run_flash {
     my $queue = $self->{config}{queue};
     my $flash_version = $self->{config}{flash_version};
     my $overwrite = $self->{param}{overwrite};
-    my $halt_at = $self->{param}{halt_at};
     my $readstype = $self->{param}{reads_type};
-    
-    if ($halt_at) {
-        if ($halt_at eq 'flash') { die "Pipeline halted at FLASH\n"; }
-    }
     
     # If running on single-end data, we can't (and don't need to) use flash.
     if ($readstype eq 'single end') {
@@ -1119,6 +1113,7 @@ sub run_flash {
     unless ($overwrite) {
         if (-e "$output_dir/$full_output_file") {
             print "--Found \n$output_dir/$full_output_file \nSkipping FLASH!\n";
+            $self->halt('flash');
             return "$output_dir/$full_output_file";
         }
         else { print "--No existing file found; proceeding with FLASH.\n"; }
@@ -1145,6 +1140,7 @@ sub run_flash {
     chdir($pwd);
     print "Changed working directory back to\n$pwd\n";
     
+    $self->halt('flash');
     # Return full file path, so that other stuff can use it
     return "$output_dir/$full_output_file";
 }
@@ -1260,11 +1256,6 @@ sub run_alignments {
     my $rapsearch = $self->{param}{rapsearch};
     my $diamond = $self->{param}{diamond};
     #my $output_prefix = $self->{param}{output_prefix};
-    my $halt_at = $self->{param}{halt_at};
-    
-    if ($halt_at) {
-        if ($halt_at eq 'alignment') { die "Pipeline halted at alignment\n"; }
-    }
     
     $self->does_file_exist($query);
     
@@ -1308,7 +1299,7 @@ sub run_alignments {
     }
     
     #if (@jobs > 0) { my $done = $self->done_when_its_done(\@jobs); }
-    
+    $self->halt('alignment');
     return (\@results, \%jobs);
 }
 
@@ -1574,13 +1565,8 @@ sub run_megan {
     #my $log_path = $self->{param}{log_path};
     my $queue = $self->{config}{queue};
     my $aligner_used = $self->get_aligner_used($alignment_file);
-    my $halt_at = $self->{param}{halt_at};
     my $memory = $self->{config}{megan_memory};
     my $display = $self->{config}{megan_display};
-    
-    if ($halt_at) {
-        if ($halt_at eq 'megan') { die "Pipeline halted at MEGAN\n"; }
-    }
     
     #$self->does_file_exist($fasta_file);
     
@@ -1611,6 +1597,7 @@ sub run_megan {
     my $jobs = $self->extract_list_of_jobs($r1jobs);
     my $done = $self->done_when_its_done($jobs);
     
+    $self->halt('megan');
     return $meganfile;
 }
 
