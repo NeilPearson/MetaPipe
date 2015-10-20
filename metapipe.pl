@@ -299,7 +299,7 @@ if ($funcs->{config}{run_trimming} =~ /yes/) {
 # Run kontaminant - remove human reads
 my $filtering_data_dir = $funcs->directory_check("$output_prefix/reads/human_filtered_fastq");
 print "Run kontaminant on trimmed reads\n";
-my ($read1file_filtered, $read2file_filtered) = $funcs->run_kontaminant($readsfiles, $filtering_data_dir, $funcs->{config}{human_reference});
+$readsfiles = $funcs->run_kontaminant($readsfiles, $filtering_data_dir, $funcs->{config}{human_reference});
 
 # Run FLASH - join overlapping paired-end reads into single reads
 my $flashed_data_dir = $funcs->directory_check("$output_prefix/reads/flashed_fastq");

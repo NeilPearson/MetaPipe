@@ -708,10 +708,6 @@ sub run_nextclip {
     my $overwrite = $self->{param}{overwrite};
     
     my $readsfiles_out = ();
-    foreach my $in (@$readsfiles) {
-        push @$readsfiles_out, "$output_path/".basename($in);
-    }
-    
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
     if ($run_nextclip eq 'no') {
         push @$readsfiles_out, @$readsfiles;
@@ -722,7 +718,7 @@ sub run_nextclip {
         # If the user has requested removal of PCR duplicates, then we need to run another sub that can do it.
         # Otherwise, we just need to return a warning, pass the filepath back, and continue merrily on our way.
         if ($remove_pcr_duplicates eq 'yes') {
-            print " -Removing PCR duplicates manually\n";
+            print " -Removing PCR duplicates manually.\n";
             my $outfile = $self->remove_pcr_duplicates($readsfiles->[0]);
             push @$readsfiles_out, $outfile;
         }
@@ -731,6 +727,10 @@ sub run_nextclip {
         }
     }
     else {
+        foreach my $in (@$readsfiles) {
+            push @$readsfiles_out, "$output_path/".basename($in);
+        }
+        
         # Got to pick out the read 1 and 2 files from the inputs. (I put them in in this order, for definite)
         my $read1file = $readsfiles->[0];
         my $read2file = $readsfiles->[1];
@@ -791,42 +791,47 @@ sub remove_pcr_duplicates {
     my $self = shift;
     my $file = shift;
     my $output_prefix = $self->{param}{output_prefix};
+    my $overwrite = $self->{param}{overwrite};
     
     my $lines_per_read = 4;
     my ($basename, $parentdir, $extension) = fileparse($file, qr/\.[^.]*$/);
     if ($extension =~ /\.fasta$/) { $lines_per_read = 2; }
     
     # I want to keep the output of this read separate, so I need to make an output directory.
-    my $output_dir = $self->directory_check("$output_prefix/reads/pcr_duplicate_removal");
+    my $output_dir = $self->directory_check("$output_prefix/reads/nextclip/pcr_duplicate_removal");
     my $outfile = "$output_dir/$basename"."$extension";
     
     # I can cobble together something to do this from code I already wrote, I reckon.
     # Read the file.
     # Use a hash to keep track of reads that we've already seen.
     # Write the data only if it's novel.
-    open INFILE, "<", $file or die "ERROR: Could not open file $file: $!\n";
-    my @buffer = ();    my %seen_reads = ();    my @output_reads = ();
-    while (my $line = <INFILE>) {
-        chomp $line;
-        push @buffer, $line;
-        if (@buffer >= $lines_per_read) {
-            # Check if a hash exists for the sequence line
-            # If not, write it, and set a value in the corresponding hash.
-            my $seq = $buffer[1];
-            if (!$seen_reads{$seq}) {
-                push @output_reads, @buffer;
-                $seen_reads{$seq} = 1;
+    # Oh - and skip this step if it's already been done, unless an overwrite has been requested.
+    if ((!-e $outfile) || ($overwrite)) {
+        open INFILE, "<", $file or die "ERROR: Could not open file $file: $!\n";
+        my @buffer = ();    my %seen_reads = ();    my @output_reads = ();
+        while (my $line = <INFILE>) {
+            chomp $line;
+            push @buffer, $line;
+            if (@buffer >= $lines_per_read) {
+                # Check if a hash exists for the sequence line
+                # If not, write it, and set a value in the corresponding hash.
+                my $seq = $buffer[1];
+                if (!$seen_reads{$seq}) {
+                    push @output_reads, @buffer;
+                    $seen_reads{$seq} = 1;
+                }
+                @buffer = ();
             }
-            @buffer = ();
         }
+        close INFILE;
+        
+        open (OUT, ">", $outfile) or die "ERROR: Cannot open output file $outfile\n"; 
+        foreach my $l (@output_reads) { print OUT "$l\n"; }
+        close OUT;
+        
+        $self->remove_trailing_newlines($outfile);
     }
-    close INFILE;
-    
-    open (OUT, ">", $outfile) or die "ERROR: Cannot open output file $outfile\n"; 
-    foreach my $l (@output_reads) { print OUT "$l\n"; }
-    close OUT;
-    
-    $self->remove_trailing_newlines($outfile);
+    print "PCR duplicates removed in reads file $outfile\n";
     return $outfile;
 }
 
@@ -969,7 +974,7 @@ sub run_trimming {
     my $trimmomatic_version = $self->{config}{trimmomatic_version};
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{trimming_memory};
-    my $readtype = $self->{param}{reads_type};
+    my $readtype = $self->{config}{reads_type};
     
     my $outfiles = ();
     if ($run_trimming eq 'no') {
@@ -1106,12 +1111,13 @@ sub run_flash {
     my $queue = $self->{config}{queue};
     my $flash_version = $self->{config}{flash_version};
     my $overwrite = $self->{param}{overwrite};
-    my $readstype = $self->{param}{reads_type};
+    my $readstype = $self->{config}{reads_type};
     
     # If running on single-end data, we can't (and don't need to) use flash.
     if ($readstype eq 'single end') {
         print "FLASH is unnecessary for single-end runs.\n";
-        return $readsfiles;
+        $self->halt('flash');
+        return $readsfiles->[0];
     }
     
     my $read1file = $readsfiles->[0];
