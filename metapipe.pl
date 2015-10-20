@@ -233,7 +233,7 @@ if ($readsfiles->[0] =~ /No such file or directory/) {
 # Remove *.gz.md5 files from the list
 @$readsfiles = grep(!/.fastq.gz.md5/, @$readsfiles);
 print "Found ".@$readsfiles." input files:\n";
-foreach my $infile (@$readsfiles) { print "$infile"; }
+foreach my $infile (@$readsfiles) { print "$infile\n"; }
 
 # Is this a single-end or paired-end run? It makes a slight difference to some of the initial steps, so we need to check.
 my $pe = 0;

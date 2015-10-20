@@ -191,13 +191,14 @@ sub dechunk_and_unzip {
         # Be aware that the correct file may already exist, amongst a set of chunked and/or compressed files.
         # Try to pick it out, if possible, before going any further.
         my @readfiles = ();
-        FILE: foreach my $file (@$files) {
+        FILES: foreach my $file (@$files) {
             chomp $file;
-            if ($file =~ /_R$read\.fastq$/) { $readfile = $file; last FILE;  }
+            if ($file =~ /_R$read\.fastq/) { $readfile = $file; last FILES;  }
             elsif ($file =~ /_R$read\_[0-9]+\.fastq/) { push @readfiles, $file; }
         }
         
         # At this point, the correct file may already have been positively ID'd - so we only need carry on with this other stuff if it hasn't.
+        
         if (!$readfile) {
             if (@readfiles == 0) {
                 die "ERROR: Cannot find Read $read data\n";
@@ -206,10 +207,11 @@ sub dechunk_and_unzip {
                 $readfile = $readfiles[0];
                 chomp $readfile;
                 # Is it compressed?
-                if ($readfile =~ /fastq\.gz$/) {
-                    $readfile =~ s/fastq\.gz/fastq/;
+                if ($readfile =~ /fastq.gz/) {
+                    $readfile =~ s/fastq.gz/fastq/;
                     # Unzip it. See if I can keep the compressed version (use -c)
                     # I don't think this needs to be bsubbed - this script itself should be bsubbed.
+                    print "Unzipping reads to file $readfile\n";
                     `gunzip -c $readfile.gz 1> $readfile`;
                 }
             }
@@ -224,7 +226,7 @@ sub dechunk_and_unzip {
                 $end =~ s/[0-9]+//g;
                 $parts[-1] .= $end;
                 $readfile = join '_', @parts;
-                $readfile =~ s/fastq\.gz/fastq/;
+                $readfile =~ s/fastq.gz/fastq/;
                 
                 # One thing to double-check: does the file we're after already exist?
                 # There's no point re-extracting data if it already exists. 
@@ -234,7 +236,7 @@ sub dechunk_and_unzip {
                     my $compressed = 0;
                     my @compressed_files = ();
                     foreach my $file (@readfiles) {
-                        if ($file =~ /fastq\.gz/) { $compressed = 1; push @compressed_files, $file; }
+                        if ($file =~ /fastq.gz/) { $compressed = 1; push @compressed_files, $file; }
                     }
                     
                     # If compressed, feed all files (restricted to compressed files) to gunzip -c; if not, use cat.
@@ -252,7 +254,20 @@ sub dechunk_and_unzip {
                 }
             }
         }
-        return $readfile;
+        else {
+            # May have correctly identified the single read file, but it may be compressed. Deal with that here.
+            print "Found single valid reads file: $readfile\n";
+            if ($readfile =~ /fastq.gz/) {
+                $readfile =~ s/fastq.gz/fastq/;
+                # Unzip it. See if I can keep the compressed version (use -c)
+                # I don't think this needs to be bsubbed - this script itself should be bsubbed.
+                print "Unzipping reads to file $readfile\n";
+                `gunzip -c $readfile.gz 1> $readfile`;
+            }
+        }
+        my $outfiles = ();
+        push @$outfiles, $readfile;
+        return $outfiles;
     }
     else {
         # Do the recursive thing I describe above
@@ -263,9 +278,6 @@ sub dechunk_and_unzip {
         }
         return $r1files;
     }
-    
-    
-    
 }
 
 sub list_subset_sizes {
@@ -711,7 +723,7 @@ sub run_nextclip {
         # Otherwise, we just need to return a warning, pass the filepath back, and continue merrily on our way.
         if ($remove_pcr_duplicates eq 'yes') {
             print " -Removing PCR duplicates manually\n";
-            my $outfile = $self->remove_pcr_duplicates();
+            my $outfile = $self->remove_pcr_duplicates($readsfiles->[0]);
             push @$readsfiles_out, $outfile;
         }
         else {
@@ -785,7 +797,7 @@ sub remove_pcr_duplicates {
     if ($extension =~ /\.fasta$/) { $lines_per_read = 2; }
     
     # I want to keep the output of this read separate, so I need to make an output directory.
-    my $output_dir = $self->directory_check("$output_prefix/pcr_duplicate_removal");
+    my $output_dir = $self->directory_check("$output_prefix/reads/pcr_duplicate_removal");
     my $outfile = "$output_dir/$basename"."$extension";
     
     # I can cobble together something to do this from code I already wrote, I reckon.
