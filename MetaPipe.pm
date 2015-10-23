@@ -10,6 +10,7 @@ use File::Basename;
 use Cwd;
 
 $|++;
+my $jobs_check_buffer = ();
 
 sub new {
     my $class = shift;
@@ -42,10 +43,6 @@ sub assign_parameters {
     $self->{param}{diamond} = shift;
     
     $self->{param}{halt_at} = shift;
-    
-    if (($self->{param}{exclude_all}) && (!$self->{param}{sub_start_size})) {
-        die "ERROR: Option --exclude_all cannot be set if no subsampling size is specified!\nUse --subsample to specify a number of reads to use.\n";
-    }
     
     if ($self->{param}{num_chunks}) {
         if ($self->{param}{num_chunks} =~ /^[0-9]+$/) {
@@ -366,8 +363,9 @@ sub make_subsamples {
     # Maybe try to also handle the case where no subsetting parameters are supplied at all.
     my %subsample_sizes = ();
     
-    # Allow the option of excluding the 'all' setting - but only if no subsample start size is given.
-    if (!$start_size) {
+    # Allow the option of excluding the 'all' setting - but only if a subsample start size is given.
+    # If no subsample sizes are specified at all, we definitely want the 'all' option in there.
+    if ($start_size) {
         if (!$exclude_all) { $subsample_sizes{all} = 1; }
     }
     
@@ -692,6 +690,94 @@ sub done_when_its_done {
     
     print "All pending jobs for this step have completed.\n";
     return "Done";
+}
+
+sub single_job_check {
+    # This is used to check that bsubbed jobs have completed successfully (and if they haven't, cause the pipeline
+    # to stop immediately rather than try to continue).
+    # Pass in a command and a job ID, and this sub will figure it out from there.
+    # I've included an option on whether to die or not because we might want to test a set of jobs at once, and I want to
+    # know what proportion of them have failed.
+    my $self = shift;
+    my $command = shift;
+    my $job_input = shift;
+    my $die = shift;
+    my $dont_wait = shift;
+    
+    # $jobs may be an array reference or a string. I'm going to assume that if it's an array reference, it only contains
+    # one job.
+    my $jobID = ();
+    if (ref $job_input eq 'ARRAY') {
+        $jobID = $job_input->[0]
+    }
+    
+    # First, we need the log file path from the command.
+    # (This may not be supplied; if so, there's not a lot we can do).
+    my @bits = split / /, $command;
+    my $logpath = ();
+    my $c = 0;
+    foreach my $bit (@bits) {
+        if ($bit eq '-oo') {
+            $logpath = [$c+1]
+        }
+        $c ++;
+    }
+    # If no logpath found, just continue silently.
+    my $error = 0;
+    if ($logpath) {
+        if (-e $logpath) {
+            # Open the file, check the status
+            open(LOG, "<", $logpath) or die "ERROR: Could not open expected log file for the following job:\n$logpath\n$!\n";
+            my @log = <LOG>; close LOG;
+            # We're looking for one particular line.
+            # When we reach a line with "Resource usage summary in, we know we've gone past it."
+            LINES: foreach my $line (@log) {
+                if ($line =~ /Resource usage summary/) { last LINES; }
+                if ($line =~ /Exited with exit code/)  {
+                    print "ERROR: Log reports failure for the following job:\n$logpath\n";
+                    if ($die) { die ""; }
+                    else { $error ++; }
+                }
+            }
+        }
+        else {
+            # If the logpath is missing, this job has probably failed.
+            # Wait a few seconds and try again, and if it still fails, kill the pipeline.
+            # We can achieve that with a bit of recursion.
+            if ($dont_wait) {
+                print "ERROR: Could not find expected log file for the following job:\n$logpath\n";
+                if ($die) { die ""; }
+                else { $error ++; }
+            }
+            else {
+                sleep 10;
+                $self->jobs_check($command, $job_input, $die, 1);
+            }
+        }
+    }
+    return $error;
+}
+
+sub jobs_check {
+    # The above sub reads the log for a single job, and kills the pipeline if the log reports failure.
+    # But parts of this pipeline have jobs run in parallel - most notably, in the alignment stage.
+    # I currently check that those jobs have all finished before continuing, but I want to check that they were all
+    # successful too.
+    # The currently active jobs (that have built up since the start of the pipeline, or since the last time this sub was called)
+    # are in $jobs_check_buffer - a hash reference, with the job IDs as the key and the commands as the value.
+    my $self = shift;
+    my $jobs = shift;
+    
+    my $error = 0;
+    foreach my $job (keys $jobs_check_buffer) {
+        my $e = single_job_check($jobs_check_buffer->{job},$job);
+        if ($e) { $error ++; }
+        
+    }
+    if ($error > 0) { die "Found $error failed jobs out of ".@$jobs." submitted\n"; }
+    
+    # Clear the jobs buffer out to prevent needless double-checking of jobs that we already know have been successful.
+    $jobs_check_buffer = ();
 }
 
 sub run_nextclip {
