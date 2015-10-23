@@ -10,7 +10,7 @@ use File::Basename;
 use Cwd;
 
 $|++;
-my $jobs_check_buffer = ();
+my %jobs_check_buffer = ();
 
 sub new {
     my $class = shift;
@@ -769,15 +769,15 @@ sub jobs_check {
     my $jobs = shift;
     
     my $error = 0;
-    foreach my $job (keys $jobs_check_buffer) {
-        my $e = single_job_check($jobs_check_buffer->{job},$job);
+    foreach my $job (keys %jobs_check_buffer) {
+        my $e = single_job_check($jobs_check_buffer{job},$job);
         if ($e) { $error ++; }
         
     }
     if ($error > 0) { die "Found $error failed jobs out of ".@$jobs." submitted\n"; }
     
     # Clear the jobs buffer out to prevent needless double-checking of jobs that we already know have been successful.
-    $jobs_check_buffer = ();
+    %jobs_check_buffer = ();
 }
 
 sub run_nextclip {
