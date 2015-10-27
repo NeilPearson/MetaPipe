@@ -180,6 +180,10 @@ Flag                Description
 \n";
 }
 
+unless (-e $configfile) {
+    die "ERROR: A configuration file (input flag --config) is required.\n"
+}
+
 # Remove tailing slash from output prefix, if present
 $output_prefix =~ s/\/$//; 
 # Then check that it's a real directory
