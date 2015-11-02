@@ -1112,7 +1112,7 @@ sub run_trimming {
         foreach my $readfile (@$readsfiles) { $bsub .= " $readfile"; }
         foreach my $i (1..@$readsfiles) {
             $i --; $bsub .= " ".$readsfiles_trimmed->[$i];
-            if ($readtype eq 'paird end') { $bsub .= " ".$readsfiles_trimmed_single->[$i]; }
+            if ($readtype eq 'paired end') { $bsub .= " ".$readsfiles_trimmed_single->[$i]; }
         }
         # I don't know what the :2:30:10 bit after $adaptersfile does, but it seems to be important.
         # (It's a bunch of trimming parameters).
