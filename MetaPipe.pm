@@ -184,21 +184,16 @@ sub copy_raw_reads {
     my $overwrite = $self->{param}{overwrite};
     
     my $file_output_prefix = $self->directory_check("$output_prefix/reads/raw");
-    my $copyjobs = ();  my $newfiles = ();
+    my $newfiles = ();
     print "Copying raw reads to $file_output_prefix\n";
     foreach my $file (@$files) {
         # Check if it's there first
         my $bn = basename($file);
         if ((-e "$file_output_prefix/$bn") && (!$overwrite)) { print "File $file_output_prefix/$bn exists; skipping copy.\n"; }
         
-        my $bsub = "bsub -J copyjob -q $queue -oo $log_path/copy.lsf \"cp $file $file_output_prefix/$bn \" ";
+        my $bsub = "cp $file $file_output_prefix/$bn";
         my $job = `$bsub`;
-        push @$copyjobs, $job;
         push @$newfiles, "$file_output_prefix/$bn";
-    }
-    if (@$copyjobs > 0) {
-        my $jobs = $self->extract_list_of_jobs($copyjobs);
-        my $done = $self->done_when_its_done($jobs);
     }
     
     return $newfiles;

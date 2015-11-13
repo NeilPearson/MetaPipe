@@ -10,6 +10,8 @@ human_reference phix_174
 # LSF information
 queue   Test128
 threads 4
+rotate_queues   yes
+queuelist   Test128,Prod128,Test256,Prod256
 
 # Do we want to copy the original reads into a convenient place within the output directory?
 copy_raw_reads  yes
