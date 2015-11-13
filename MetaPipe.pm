@@ -878,6 +878,7 @@ sub remove_pcr_duplicates {
     my $file = shift;
     my $output_prefix = $self->{param}{output_prefix};
     my $overwrite = $self->{param}{overwrite};
+    my $check_n_characters = $self->{config}{check_first_n_characters};
     
     my $lines_per_read = 4;
     my ($basename, $parentdir, $extension) = fileparse($file, qr/\.[^.]*$/);
@@ -902,9 +903,14 @@ sub remove_pcr_duplicates {
                 # Check if a hash exists for the sequence line
                 # If not, write it, and set a value in the corresponding hash.
                 my $seq = $buffer[1];
-                if (!$seen_reads{$seq}) {
+                my $checkseq = $seq;
+                # In cases where we know the read quality drops towards the end of the reads, we may want to work out PCR duplicates
+                # based on only the first n reads. There is a parameter in the config file for that. (Leave it blank to check everything).
+                if ($check_n_characters) { $checkseq = substr($seq, 0, $check_n_characters); }
+                
+                if (!$seen_reads{$checkseq}) {
                     push @output_reads, @buffer;
-                    $seen_reads{$seq} = 1;
+                    $seen_reads{$checkseq} = 1;
                 }
                 @buffer = ();
             }

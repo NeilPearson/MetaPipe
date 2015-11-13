@@ -17,6 +17,7 @@ numchunks   50
 # NextClip parameters
 run_nextclip    yes
 remove_pcr_duplicates   yes
+check_first_n_characters    100
 
 # Trimming parameters
 run_trimming    yes
