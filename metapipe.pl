@@ -247,6 +247,14 @@ foreach my $file (@$readsfiles) {
 if ($pe == 1) { $funcs->{config}{reads_type} = "paired end"; }
 else          { $funcs->{config}{reads_type} = "single end"; }
 
+# Do we want to copy the unprocessed reads files to a convenient place within the data directory?
+# (We might want to do that if we have only read permissions in the data's original location, or in order to ensure we don't accidentally overwrite
+# or alter the master copy of the data).
+$funcs->directory_check("$output_prefix/reads");
+if ($funcs->{config}{copy_raw_reads} eq 'yes') {
+    $readsfiles = $funcs->copy_raw_reads($readsfiles);
+}
+
 # Determine what needs to be done to get a single, unzipped file for reads 1 and 2 (and then do it).
 # NOTE: Both of these hold the complete path from root.
 print "Dechunk and unzip input files\n";
@@ -257,7 +265,7 @@ $readsfiles = $funcs->dechunk_and_unzip($readsfiles);
 
 # Run NextClip, in order to measure the level of PCR duplicates, and to remove them if called for.
 # Note that $read1file and $read2file continue to hold full path names.
-$funcs->directory_check("$output_prefix/reads");
+
 my $nextclip_path = $funcs->directory_check("$output_prefix/reads/nextclip");
 print "Run NextClip on reads\n";
 $readsfiles = $funcs->run_nextclip($readsfiles, $nextclip_path);

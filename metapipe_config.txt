@@ -11,6 +11,9 @@ human_reference phix_174
 queue   Test128
 threads 4
 
+# Do we want to copy the original reads into a convenient place within the output directory?
+copy_raw_reads  yes
+
 # Re-chunking parameters
 numchunks   50
 
