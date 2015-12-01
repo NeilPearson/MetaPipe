@@ -356,6 +356,134 @@ sub get_fastq_read_ids {
 }
 
 sub make_subsamples {
+    # Try again, but keep it simpler. Get rid of this random stuff and just pick the first n reads, since they're not in any particular order anyway.
+    # Make a consistent output structure so I always know what's happening
+    # Chunking will remain a similar process, though it becomes a lot easier to see how it will work after looking at this.
+    # Pro mode: make the file recognised as 'all', when requested, actually be the file that comes out of flash. Use a symlink?
+    
+    my $self = shift;
+    my $start_size = $self->{param}{sub_start_size};
+    my $step_size = $self->{param}{sub_step};
+    if (!$step_size) { $step_size = 0; }
+    my $num_subsamples = $self->{param}{sub_num};
+    my $exclude_all = $self->{param}{exclude_all};
+    my $overwrite = $self->{param}{overwrite};
+    
+    #my $sample_id = $self->{param}{sample_id};
+    # Bear in mind that these last two inputs may not be supplied, or may be null.
+    # In that case, make only one subsample.
+    my $readfile = shift;
+    my $outdir = shift;
+    
+    # Take care of some stuff to make sure we're getting an accurate, nonsense-free look at the number of reads in the input file.
+    # Adjusting this lets this sub handle either fastq or fasta input. 
+    $self->remove_trailing_newlines($readfile);
+    my $lines_per_read = 4;
+    my ($basename, $parentdir, $extension) = fileparse($readfile, qr/\.[^.]*$/);
+    if ($readfile =~ /\.fasta$/) { $lines_per_read = 2; }
+    
+    my %subsample_files = ();
+    
+    # Get number of reads in the file
+    # Choose appropriate division
+    my $number_of_reads = `wc -l $readfile`;
+    $number_of_reads /= $lines_per_read;
+   
+    # Set up subsample numbers
+    # Check that they don't overrun number of available reads; react appropriately if they do
+    # Store the numbers in $self somewhere
+    # Modify list_subset_sizes to simply recall that
+    # Maybe try to also handle the case where no subsetting parameters are supplied at all.
+    my %subsample_sizes = ();
+    
+    # Allow the option of excluding the 'all' setting - but only if a subsample start size is given.
+    # If no subsample sizes are specified at all, we definitely want the 'all' option in there.
+    if ($start_size) {
+        if (!$exclude_all) { $subsample_sizes{all} = 1; }
+    }
+    
+    my $subsize = $start_size;
+    if ($num_subsamples) {
+        # If a number of subsamples is set ($start_size will also be set), we want multiple subsamples, stepping up by $step_size each time.
+        for (1..$num_subsamples) {
+            if ($subsize < $number_of_reads) { $subsample_sizes{$subsize} = 1; }
+            else {
+                $subsample_sizes{all} = 1;
+                print "WARN: Not enough reads to meet planned subsampling scheme!\n  Proposed sample:\t$subsize\n  Available:\t$number_of_reads\n";
+            }
+            $subsize += $step_size;
+        }
+    }
+    elsif ($start_size) {
+        # If number of subsamples is not set, we want a single subsample of $start_size. 
+        if ($subsize < $number_of_reads) { $subsample_sizes{$subsize} = 1; }
+        else {
+            $subsample_sizes{all} = 1;
+            print "WARN: Not enough reads to meet planned subsampling scheme!\n  Proposed sample:\t$subsize\n  Available:\t$number_of_reads\n";
+        }
+    }
+    else {
+        # If neither are set, we want all reads, regardless of size.
+        $subsample_sizes{all} = 1;
+    }
+    
+    my @subset_sizes = keys %subsample_sizes;
+    $self->{subset_sizes} = \@subset_sizes;
+    
+    # OK, let's do this properly this time. No fancy rubbish - just pull n lines out at a time until we have the right number.
+    my @subsample_files = ();
+    print "Making these subsets:\n";
+    foreach my $subset_size (@subset_sizes) {
+        print "    $subset_size\n";
+        my $subset_file = "$outdir/$subset_size.$extension";
+        if ($subset_size eq 'all') {
+            # Make a symlink $infile->$outdir/all.fastq
+            `ln -s $readfile $subset_file`;
+            print "  Making 'all' subset (symlink from reads file)\n";
+        }
+        elsif ((!-e $subset_file) || ($overwrite)) {
+            print "  Making '$subset_size' subset\n";
+            # Important: if $overwrite is set, we should delete the existing file, if present.
+            if ($overwrite) { `rm $subset_file`; }
+            
+            # Now, let's extract that number of reads and write them to the right file.
+            open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
+            my @buffer = ();    my @output_reads = ();
+            my $read_count = 0; my $total_read_count = 0;
+            while (my $line = <INFILE>) {
+                chomp $line;
+                push @buffer, $line;
+                if (@buffer >= $lines_per_read) {
+                    my $read = join "\n", @buffer;
+                    push @output_reads, $read;
+                    @buffer = ();
+                    
+                    $read_count ++; $total_read_count ++;
+                    if (($read_count >= $subset_size) || ($total_read_count >= $number_of_reads)) {
+                        open (OUT, ">", $subset_file) or die "ERROR: Cannot open reads subsample file $subset_file\n"; 
+                        foreach my $read (@output_reads) { print OUT "$read\n"; }
+                        close OUT;
+                        @output_reads = ();
+                        $read_count = 0;
+                    }
+                }
+            }
+            close INFILE;
+        }
+        else {
+            print "  Subset '$subset_size' already exists; using that\n";
+        }
+        push @subsample_files, $subset_file;
+    }
+    
+    print "final subsample files:\n";
+    foreach my $file (@subsample_files) {
+        print "$file\n";
+    }
+    return \@subsample_files;
+}
+
+sub make_subsamples_the_bad_way {
     # Try again, but keep it simpler
     # Make a consistent output structure so I always know what's happening
     # Try it in here first.
@@ -617,7 +745,7 @@ sub rechunk {
             @buffer = ();
             $read_count ++; $total_read_count ++;
             
-            if (($read_count >= $reads_per_chunk) || ($total_read_count == $number_of_reads)) {
+            if (($read_count >= $reads_per_chunk) || ($total_read_count >= $number_of_reads)) {
                 $chunk_files{"$chunkdir/$outfile"."$extension"} = 1;
                 open (OUT, ">", "$chunkdir/$outfile"."$extension") or die "ERROR: Cannot open reads subsample file $chunkdir/$outfile"."$extension\n"; 
                 foreach my $l (@output_reads) { print OUT "$l\n"; }
