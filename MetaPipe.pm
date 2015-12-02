@@ -452,7 +452,7 @@ sub make_subsamples {
             open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
             my @buffer = ();    my @output_reads = ();
             my $read_count = 0;
-            while (my $line = <INFILE>) {
+            READIT: while (my $line = <INFILE>) {
                 chomp $line;
                 push @buffer, $line;
                 if (@buffer >= $lines_per_read) {
@@ -474,6 +474,7 @@ sub make_subsamples {
                         print "          ($number_of_output_reads reads actually written to the file)\n";
                         @output_reads = ();
                         $read_count = 0;
+                        last READIT;
                     }
                     @buffer = ();
                 }
