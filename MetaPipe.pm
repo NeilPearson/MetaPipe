@@ -377,7 +377,7 @@ sub make_subsamples {
     
     # Take care of some stuff to make sure we're getting an accurate, nonsense-free look at the number of reads in the input file.
     # Adjusting this lets this sub handle either fastq or fasta input. 
-    $self->remove_trailing_newlines($readfile);
+    #$self->remove_trailing_newlines($readfile);
     my $lines_per_read = 4;
     my ($basename, $parentdir, $extension) = fileparse($readfile, qr/\.[^.]*$/);
     if ($readfile =~ /\.fasta$/) { $lines_per_read = 2; }
@@ -387,6 +387,8 @@ sub make_subsamples {
     # Get number of reads in the file
     # Choose appropriate division
     my $number_of_reads = `wc -l $readfile`;
+    my @sp = split /\s/, $number_of_reads;
+    $number_of_reads = $sp[0];
     $number_of_reads /= $lines_per_read;
    
     # Set up subsample numbers
@@ -435,37 +437,45 @@ sub make_subsamples {
     print "Making these subsets:\n";
     foreach my $subset_size (@subset_sizes) {
         print "    $subset_size\n";
-        my $subset_file = "$outdir/$subset_size.$extension";
+        my $subset_file = "$outdir/$subset_size"."$extension";
         if ($subset_size eq 'all') {
             # Make a symlink $infile->$outdir/all.fastq
             `ln -s $readfile $subset_file`;
             print "  Making 'all' subset (symlink from reads file)\n";
         }
         elsif ((!-e $subset_file) || ($overwrite)) {
-            print "  Making '$subset_size' subset\n";
+            #print "  Making '$subset_size' subset\n";
             # Important: if $overwrite is set, we should delete the existing file, if present.
             if ($overwrite) { `rm $subset_file`; }
             
             # Now, let's extract that number of reads and write them to the right file.
             open INFILE, "<", $readfile or die "ERROR: Could not open fastq file $readfile: $!\n";
             my @buffer = ();    my @output_reads = ();
-            my $read_count = 0; my $total_read_count = 0;
+            my $read_count = 0;
             while (my $line = <INFILE>) {
                 chomp $line;
                 push @buffer, $line;
                 if (@buffer >= $lines_per_read) {
                     my $read = join "\n", @buffer;
                     push @output_reads, $read;
-                    @buffer = ();
                     
-                    $read_count ++; $total_read_count ++;
-                    if (($read_count >= $subset_size) || ($total_read_count >= $number_of_reads)) {
+                    # Apparently this incredibly simple thing just won't work. Wrong number of reads output. 
+                    $read_count ++;
+                    
+                    if (($read_count >= $subset_size) || ($read_count >= $number_of_reads)) {
+                        print "        Subset $subset_size: writing ".@output_reads." reads (readcount $read_count) of $number_of_reads in dataset\n";
                         open (OUT, ">", $subset_file) or die "ERROR: Cannot open reads subsample file $subset_file\n"; 
                         foreach my $read (@output_reads) { print OUT "$read\n"; }
                         close OUT;
+                        my $number_of_output_reads = `wc -l $subset_file`;
+                        my @sp = split /\s/, $number_of_output_reads;
+                        $number_of_output_reads = $sp[0];
+                        $number_of_output_reads /= $lines_per_read;
+                        print "          ($number_of_output_reads reads actually written to the file)\n";
                         @output_reads = ();
                         $read_count = 0;
                     }
+                    @buffer = ();
                 }
             }
             close INFILE;
@@ -662,6 +672,8 @@ sub rechunk {
     # Get number of reads in the file
     # Choose appropriate division
     my $number_of_reads = `wc -l $readfile`;
+    my @sp = split /\s/, $number_of_reads;
+    $number_of_reads = $sp[0];
     $number_of_reads /= $lines_per_read;
     
     # Calculate a number; this will help us decide which chunk file each read should go into.
