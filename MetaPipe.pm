@@ -390,6 +390,8 @@ sub make_subsamples {
     my @sp = split /\s/, $number_of_reads;
     $number_of_reads = $sp[0];
     $number_of_reads /= $lines_per_read;
+    # Store this figure; it's useful.
+    $self->{param}{number_of_reads} = $number_of_reads;
    
     # Set up subsample numbers
     # Check that they don't overrun number of available reads; react appropriately if they do
@@ -1025,11 +1027,11 @@ sub run_nextclip {
             # Nextclip dumps all its output into the place specified in the output prefix (obviously). The actual read files are named results_[A,B,C,D]_R[1,2], though. The majority of the reads will usually end up in category D, because we usually won't be doing metagenomics on Nextera long mate pair libraries.
             # We want all of those reads, so we have to use cat and pipe them off to a single file, or something. Nonetheless, we should then have the full set of reads, minus PCR duplicates. (If we want a specific set of reads pulled out by NextClip in the future, this is the best place to get it).
             print "Nextclip reads output files:\n$read1file_out\n$read2file_out\n";
-            my $bsub = "bsub -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
+            my $bsub = "bsub -q $queue -J CatR1 -oo /dev/null \"cat $output_path/results_*_R1.fastq > $read1file_out \" ";
             my $r1jobs = `$bsub`;
             my $jobs = $self->extract_list_of_jobs($r1jobs);
             my $done = $self->done_when_its_done($jobs);
-            $bsub = "bsub -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
+            $bsub = "bsub -q $queue -J CatR2 -oo /dev/null \"cat $output_path/results_*_R2.fastq > $read2file_out \" ";
             $r1jobs = `$bsub`;
             $jobs = $self->extract_list_of_jobs($r1jobs);
             $done = $self->done_when_its_done($jobs);

@@ -350,6 +350,18 @@ foreach my $subset (@$subset_sizes) {
     $funcs->directory_check("$output_prefix/alignments");
     $funcs->{config}{alignment_base_dir} = $funcs->directory_check("$output_prefix/alignments/$subset");
     
+    # A neat addition: if the total number of reads < requested subset size, the subset label will be 'all' rather than the actual number of reads.
+    # Make a symlink for the requested subset size to the 'all' subset.
+    # We don't need to do this EVERY time, though - only in cases where a subset size HAS been requested, but there aren't enough reads to meet it.
+    #my $num_reads = $funcs->{param}{number_of_reads};
+    #if ($subsample_start_size) {
+    #    if ($subsample_start_size > $num_reads) {
+    #        
+    #    }
+    #}
+    
+    
+    
     print "Convert to FASTA\n";
     my (@fasta_files, @jobs) = ();
     foreach my $chunk (1..$funcs->{param}{num_chunks}) {
