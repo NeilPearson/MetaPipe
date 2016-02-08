@@ -1,4 +1,5 @@
 # Paths to resources
+scriptsdir  /tgac/workarea/group-si/metapipe
 adaptersfile    /tgac/scratch/pearsonn/metapipe/adapters/metapipe_adapters.fa
 kontaminant_database    /data/references/databases/kontaminants
 blastn_database /tgac/workarea/group-si/pearsonn/databases/nt
@@ -7,11 +8,13 @@ rapsearch_database  /tgac/workarea/group-si/leggettr/databases/rapsearch_10Dec20
 diamond_database    /tgac/workarea/group-si/leggettr/databases/diamond_10Dec2014/nr
 human_reference phix_174
 
-# LSF information
+# Job scheduler information
+jobsys  slurm
 queue   Test128
 threads 4
 rotate_queues   yes
 queuelist   Test128,Prod128,Test256,Prod256
+memory  8000
 
 # Do we want to copy the original reads into a convenient place within the output directory?
 copy_raw_reads  yes

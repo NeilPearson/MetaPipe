@@ -16,7 +16,7 @@ $| ++;
 
 # Many of the steps in this pipeline also take a considerable amount of time. That raises two problems:
 #  -If repeating steps (particularly while developing and debugging, but plausibly at other times), we should be able to check for existing output before commencing a step.
-#  -We should be able to wait for one step to complete before launching the next. This requires a means of understanding bsub jobs and waiting for the right ones to complete.
+#  -We should be able to wait for one step to complete before launching the next. This requires a means of checking running jobs and waiting for the right ones to complete.
 
 # Inputs
 # Requested capability:
@@ -81,6 +81,11 @@ GetOptions(
     'halt_at:s'         => \$halt_at,
 );
 
+# This input is important, so wew shouldn't go on without it. 
+if (!$output_prefix) {
+    die "ERROR: Output directory (flag --output_prefix) must be supplied! It will be created if it does not exist.\n";
+}
+
 # The overwrite option is for times a user re-runs this pipeline - for example, using slightly different parameters.
 # Normally, pipeline steps will check for existing output at each step before launching into what might be a lengthy bit of processing.
 # But sometimes, a user might want to overwrite all that and start from the top. The overwrite parameter instructs the pipeline to do that. 
@@ -91,7 +96,6 @@ GetOptions(
 # Instead, I have to simply check that the values are correctly formatted, and leave the rest until later.
 # Remember that no subsample parameters may be supplied - in which case we just sample everything.
 if ($subsample_start_size) {
-    print "Checking subsampling inputs\n";
     # If this is set, it must be numeric and an integer.
     unless ($subsample_start_size =~ /^[0-9]+$/) {
         print "ERROR: Subsample initial size (--subsample) must be numeric!\n";
@@ -128,7 +132,6 @@ if ($subsample_start_size) {
 }
 else {
     # Just to be sure, blank the other parameters if subsample start size isn't supplied.
-    print "No subsampling required\n";
     $subsample_step = ();
     $number_of_subsamples = ();
 }
@@ -172,8 +175,8 @@ Flag                Description
                     rather than used as a starting point for continuation of the pipeline
 --blastn            Use the BLASTN aligner
 --blastx            Use the BLASTX aligner
---RapSearch         Use the RapSearch aligner
---Diamond           Use the Diamond aligner
+--rapsearch         Use the RapSearch aligner
+--diamond           Use the Diamond aligner
 --log_dir           Path in which logs will be stored
 --halt_at           Stop the pipeline before launching the supplied step (options: trimming, filtering, flash, alignment, megan)
 
@@ -187,7 +190,6 @@ unless (-e $configfile) {
 # Remove tailing slash from output prefix, if present
 $output_prefix =~ s/\/$//; 
 # Then check that it's a real directory
-print "Check output directory\n";
 $funcs->directory_check($output_prefix);
 
 # Use the data directory ($datadir) to figure out the output prefix, if not set already
@@ -210,7 +212,6 @@ if (!$log_path) { $log_path = $funcs->directory_check("$output_prefix/logs"); }
 
 # Inputs have been checked; I can now add them to an object.
 # Config file also gets parsed when this call is made
-print "OO-ise input parameters\n";
 $funcs->assign_parameters(
                            $configfile,             $datadir,               $subsample_start_size,
                            $subsample_step,         $number_of_subsamples,  $unique_subsamples,
@@ -218,6 +219,67 @@ $funcs->assign_parameters(
                            $overwrite,              $log_path,              $blastn,
                            $blastx,                 $rapsearch,             $diamond,
                            $halt_at);
+
+# Print out input values, starting with non-optional ones
+my $date_now = localtime();
+print "Welcome to the Metapipe metagenomics pipeline!
+-----
+Run begun at $date_now
+Input parameters have been set as follows:
+
+--config         (config file)              $funcs->{param}{configfile}
+--data           (input directory)          $funcs->{param}{datadir}
+--log_dir        (log directory)            $funcs->{param}{log_path}
+--output_prefix  (output directory)         $funcs->{param}{output_prefix}";
+
+# Move on to the optional ones
+if ($halt_at) { print "--halt_at        (point to stop at)  $funcs->{param}{halt_at}\n" }
+if ($overwrite) { print "--overwrite      (replace existing output)  $funcs->{param}{overwrite}\n" }
+print "\n";
+
+# Alignments regime
+print "The following aligners will run:\n";
+if ($funcs->{param}{blastn})    { print "  BLASTn\n"; }
+if ($funcs->{param}{blastx})    { print "  BLASTx\n"; }
+if ($funcs->{param}{rapsearch}) { print "  RapSearch\n"; }
+if ($funcs->{param}{diamond})   { print "  Diamond\n"; }
+print "\n";
+
+print "Subsampling regime:\n";
+#ÊSubsampling regime
+if (($subsample_start_size) && ($number_of_subsamples) && ($subsample_step)) {
+    print "  Create $number_of_subsamples subsamples";
+    if ($unique_subsamples) { print " (non-overlapping)"; }
+    print "\n  beginning with $subsample_start_size reads\n  increasing by $subsample_step reads every sample.\n";
+}
+elsif (($subsample_start_size) && ($number_of_subsamples)) {
+    print "  Create $number_of_subsamples subsamples";
+    if ($unique_subsamples) { print " (non-overlapping)"; }
+    print "\n  of $subsample_start_size reads.\n";
+}
+elsif ($subsample_start_size) {
+    print "  Create a single subsample";
+    print "\n  of $subsample_start_size reads.\n";
+}
+else {
+    print "  All reads will be processed.\n";
+}
+if ($funcs->{param}{num_chunks}) {
+    print "  All subsamples will be divided into $funcs->{param}{num_chunks} chunks to facilitate better compute resource usage.\n";
+}
+
+
+if (($exclude_all) && ($subsample_start_size)) {
+    print "  The full set of reads will not be processed (unless requested sample size > total number of reads)\n";
+}
+elsif ($subsample_start_size) {
+    print "  The full set of reads will also be processed independently.\n";
+}
+
+
+
+print "-----
+Inputs prepared\nLocate data to commence pipeline\n";
 
 # Let's work on the reasonable assumption that we're using data from a PAP directory, which follows the same organisational structure.
 # A run's data is probably going to be contained within a single project directory, though there may be multiple multiplexed samples in there.
@@ -228,7 +290,7 @@ $funcs->assign_parameters(
 # Merge input files - they may be chunked.
 # I can copy in my dechunk'n'unzip code from the NextClip wrapper to do that.
 $datadir =~ s/\/$//; # Remove tailing slash
-print "Looking for input files in $datadir\n";
+print "\nLooking for input files in directory\n  $datadir\n";
 my $pattern = '*.fastq*';
 my $readsfiles = $funcs->find_files($datadir, $pattern);
 if ($readsfiles->[0] =~ /No such file or directory/) {
@@ -236,8 +298,8 @@ if ($readsfiles->[0] =~ /No such file or directory/) {
 }
 # Remove *.gz.md5 files from the list
 @$readsfiles = grep(!/.fastq.gz.md5/, @$readsfiles);
-print "Found ".@$readsfiles." input files:\n";
-foreach my $infile (@$readsfiles) { print "$infile\n"; }
+print "Found ".@$readsfiles." input file(s):\n";
+foreach my $infile (@$readsfiles) { print "  ".basename($infile)."\n"; }
 
 # Is this a single-end or paired-end run? It makes a slight difference to some of the initial steps, so we need to check.
 my $pe = 0;
@@ -257,7 +319,7 @@ if ($funcs->{config}{copy_raw_reads} eq 'yes') {
 
 # Determine what needs to be done to get a single, unzipped file for reads 1 and 2 (and then do it).
 # NOTE: Both of these hold the complete path from root.
-print "Dechunk and unzip input files\n";
+print "-----\nDechunk and unzip input files\n";
 $readsfiles = $funcs->dechunk_and_unzip($readsfiles);
 # For the moment, we can leave these unzipped/dechunked read files where they are. But later, we create several different sets -
 # fasta format, flashed, filtered, subsampled, etc - that ought to go in the output directory somewhere. 
@@ -267,7 +329,7 @@ $readsfiles = $funcs->dechunk_and_unzip($readsfiles);
 # Note that $read1file and $read2file continue to hold full path names.
 
 my $nextclip_path = $funcs->directory_check("$output_prefix/reads/nextclip");
-print "Run NextClip on reads\n";
+print "-----\nRun NextClip on reads\n";
 $readsfiles = $funcs->run_nextclip($readsfiles, $nextclip_path);
 
 # Run FastQC (first time); get relevant info out of it
@@ -279,46 +341,46 @@ $readsfiles = $funcs->run_nextclip($readsfiles, $nextclip_path);
 $funcs->directory_check("$output_prefix/fastqc");
 my $fastqc_firstpass_path = $funcs->directory_check("$output_prefix/fastqc/untrimmed");
 
-# Because I'm bsubbing jobs (to take advantage of our cluster's opportunities for parallelisation) I need to use the sub that waits for jobs to complete.
+# Because I'm submitting jobs (to take advantage of our cluster's opportunities for parallelisation) I need to use the sub that waits for jobs to complete.
 # That gets a job ID and waits for it to complete before cintinuing with the script. Without it, we'll charge ahead to stuff wer're not ready for.
-print "Run FastQC on unmodified input files\n";
+print "-----\nRun FastQC on unmodified reads\n";
 my $fastqcfiles = $funcs->run_fastqc($readsfiles, $fastqc_firstpass_path);
 
 # Look at those FastQC results; determine appropriate action
 # (Amounts to throwing a minor warning, at most, at this stage)
-my $trimming_done = ();
-$funcs->examine_fastqc_results($fastqcfiles, $trimming_done);
+$funcs->examine_fastqc_results($fastqcfiles);
 
 #ÊTrim the reads 
 # Use trimmomatic. It's a bit of a complex call by the look of it, but I can handle it.
 my $threads = 4;
 my $trimming_data_dir = $funcs->directory_check("$output_prefix/reads/trimmed_fastq");
-print "Run trimming on input data\n";
+print "-----\nRun trimming on input data\n";
 $readsfiles = $funcs->run_trimming($readsfiles, $trimming_data_dir);
+$funcs->{config}{trimming_done} = 1;
 
 # Re-run FastQC, to check adapters have been removed.
 # (That is, if trimming has been specified!)
 if ($funcs->{config}{run_trimming} =~ /yes/) {
     my $fastqc_secondpass_path = $funcs->directory_check("$output_prefix/fastqc/trimmed");
-    print "Run FastQC again on trimmed data\n";
+    
+    print "-----\nRun FastQC again on trimmed data\n";
     $fastqcfiles = $funcs->run_fastqc($readsfiles, $fastqc_secondpass_path);
     
     # Look at those second FastQC results; determine appropriate action
-    $trimming_done = 1;
-    $funcs->examine_fastqc_results($fastqcfiles, $trimming_done);
+    $funcs->examine_fastqc_results($fastqcfiles);
 }
 
 # Run kontaminant - remove human reads
 my $filtering_data_dir = $funcs->directory_check("$output_prefix/reads/human_filtered_fastq");
-print "Run kontaminant on trimmed reads\n";
+print "-----\nRun kontaminant on trimmed reads\n";
 $readsfiles = $funcs->run_kontaminant($readsfiles, $filtering_data_dir, $funcs->{config}{human_reference});
 
 # Run FLASH - join overlapping paired-end reads into single reads
 my $flashed_data_dir = $funcs->directory_check("$output_prefix/reads/flashed_fastq");
 my $readsfile_flashed = "flashed_reads"; # Note: Not quite the complete filename; no extension. FLASH adds one.
-print "Run FLASH on filtered reads\n";
+print "-----\nRun FLASH on filtered reads\n";
 $readsfile_flashed = $funcs->run_flash($readsfiles, $flashed_data_dir, $readsfile_flashed);
-print "Flashed reads file:\n$readsfile_flashed\n";
+print "Flashed reads file:\n  $readsfile_flashed\n";
 
 # Subsampling
 # This is where it starts to get a little more complex.
@@ -329,7 +391,7 @@ print "Flashed reads file:\n$readsfile_flashed\n";
 my $aligners = $funcs->list_aligners();
 
 my $subsample_dir = $funcs->directory_check("$output_prefix/reads/subsampled");
-print "Make subsamples of the data\n";
+print "-----\nMake subsamples of the data\n";
 my $subsamples = $funcs->make_subsamples($readsfile_flashed, $subsample_dir);
 # Chunk those subsets up too
 foreach my $subsample_file (@$subsamples) {
@@ -337,10 +399,10 @@ foreach my $subsample_file (@$subsamples) {
 }
 
 my $megan_dir = $funcs->directory_check("$output_prefix/MEGAN");
-
+print "-----\nReady to begin alignment analyses\n";
 my $subset_sizes = $funcs->list_subset_sizes();
 foreach my $subset (@$subset_sizes) {
-    print "-----\nSubset $subset\n";
+    print "-----\nPreparing alignments for subset $subset\n";
     
     # Chunked reads: output_prefix/reads/subsampled/[number of reads]/[chunk number].fastq
     # Need results files out, separated by aligner used to produce them.
@@ -360,12 +422,10 @@ foreach my $subset (@$subset_sizes) {
     #    }
     #}
     
-    
-    
-    print "Convert to FASTA\n";
+    #print "Convert to FASTA\n";
     my (@fasta_files, @jobs) = ();
     foreach my $chunk (1..$funcs->{param}{num_chunks}) {
-        print "    chunk $chunk\n";
+        print "    chunk $chunk - ";
         my $chunkdir = "$subsample_dir/$subset";
         my $chunk_o_reads = "$chunkdir/$chunk.fastq";
         
@@ -380,9 +440,9 @@ foreach my $subset (@$subset_sizes) {
     
     my %alignment_results = ();
     my %alignment_jobs = ();
-    print "Preparing alignments for...\n";
+    print "Launching alignments for...\n";
     foreach my $chunk (1..$funcs->{param}{num_chunks}) {
-        print "    chunk $chunk\n";
+        print "  chunk $chunk\n";
         my $chunkdir = "$subsample_dir/$subset";
         my $chunk_o_reads = "$chunkdir/$chunk.fasta";
         
@@ -398,7 +458,6 @@ foreach my $subset (@$subset_sizes) {
             
             my $aligner_used = $funcs->get_aligner_used($file);
             push @{$alignment_results{$aligner_used}}, $file;
-            
         }
         
         foreach my $aligner (@$aligners) {
