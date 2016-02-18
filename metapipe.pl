@@ -57,13 +57,13 @@ foreach my $cla (@ARGV) {
 }
 
 my ($help, $subsample_start_size, $subsample_step, $number_of_subsamples, $unique_subsamples, $num_chunks, $exclude_all) = ();
-my ($datadir, $configfile, $output_prefix, $overwrite, $log_path, $halt_at) = ();
+my ($data, $configfile, $output_prefix, $overwrite, $log_path, $halt_at) = ();
 # We have a choice of alignment tools! We may want to run one, or more than one. This should be user-specifiable at the command line.
 my ($blastn, $blastx, $rapsearch, $diamond) = ();
 
 GetOptions(
     'config=s'          => \$configfile,
-    'data=s'            => \$datadir,       # Should be a directory containing a single sample's reads, with the name "Sample_[sample ID]".
+    'data=s'            => \$data,       # Can be a directory containing fastq files, or a direct path to a single fastq file.
     'help'              => \$help,
     'subsample:s'       => \$subsample_start_size,
     'step:s'            => \$subsample_step,
@@ -161,7 +161,7 @@ The directory path is supplied as input.
 Command line options
 Flag                Description
 --config            Path to config file
---data              Path to directory containing input data
+--data              Path to a directory containing input FASTQ files, or path to a single FASTQ file
 --help              This help message
 --subsample         Number of reads to subsample. If --step and --num_subsamples are supplied, this
                     specifies the size of the smallest subsample.
@@ -213,7 +213,7 @@ if (!$log_path) { $log_path = $funcs->directory_check("$output_prefix/logs"); }
 # Inputs have been checked; I can now add them to an object.
 # Config file also gets parsed when this call is made
 $funcs->assign_parameters(
-                           $configfile,             $datadir,               $subsample_start_size,
+                           $configfile,             $data,                  $subsample_start_size,
                            $subsample_step,         $number_of_subsamples,  $unique_subsamples,
                            $num_chunks,             $exclude_all,           $output_prefix,
                            $overwrite,              $log_path,              $blastn,
@@ -289,15 +289,27 @@ Inputs prepared\nLocate data to commence pipeline\n";
 
 # Merge input files - they may be chunked.
 # I can copy in my dechunk'n'unzip code from the NextClip wrapper to do that.
-$datadir =~ s/\/$//; # Remove tailing slash
-print "\nLooking for input files in directory\n  $datadir\n";
-my $pattern = '*.fastq*';
-my $readsfiles = $funcs->find_files($datadir, $pattern);
-if ($readsfiles->[0] =~ /No such file or directory/) {
-    die "ERROR: Cannot find read files in directory\n  $datadir\n";
+# Check if it's a file or a directory, and act appropriately.
+my $readsfiles = ();
+if (-f $data) {
+    print "Found single FASTQ file input\n";
+    push @$readsfiles, $data;
 }
-# Remove *.gz.md5 files from the list
-@$readsfiles = grep(!/.fastq.gz.md5/, @$readsfiles);
+elsif (-d $data) {
+    $data =~ s/\/$//; # Remove tailing slash
+    print "\nLooking for input files in directory\n  $data\n";
+    my $pattern = '*.fastq*';
+    $readsfiles = $funcs->find_files($data, $pattern);
+    if ($readsfiles->[0] =~ /No such file or directory/) {
+        die "ERROR: Cannot find read files in directory\n  $data\n";
+    }
+    # Remove *.gz.md5 files from the list
+    @$readsfiles = grep(!/.fastq.gz.md5/, @$readsfiles);
+}
+else {
+    die "ERROR: Input data path\n  $data\ndoes not correspond to any existing directory or file!\n";
+}
+
 print "Found ".@$readsfiles." input file(s):\n";
 foreach my $infile (@$readsfiles) { print "  ".basename($infile)."\n"; }
 

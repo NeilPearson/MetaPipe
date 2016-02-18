@@ -23,7 +23,7 @@ sub assign_parameters {
     my $self = shift;
     
     $self->{param}{config} = shift;
-    $self->{param}{datadir} = shift;
+    $self->{param}{data} = shift;
     $self->{param}{sub_start_size} = shift;
     
     $self->{param}{sub_step} = shift;
