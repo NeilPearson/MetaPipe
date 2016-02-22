@@ -484,7 +484,7 @@ foreach my $subset (@$subset_sizes) {
         my $megan_alignerdir = $funcs->directory_check("$megan_sampledir/$aligner");
         my $results = $alignment_results{$aligner};
         my $jobs = $alignment_jobs{$aligner};
-        my $log = "$megan_sampledir/MEGAN_log.lsf";
+        my $log = "$megan_sampledir/MEGAN_log.".$funcs->{config}{jobsys};
         
         $funcs->run_megan($results, \@fasta_files, $megan_alignerdir, $log, $jobs);
     }

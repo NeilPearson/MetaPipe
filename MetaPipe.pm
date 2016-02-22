@@ -932,6 +932,7 @@ sub run_nextclip {
     my $nextclip_version = $self->{config}{nextclip_version};
     my $remove_pcr_duplicates = $self->{config}{remove_pcr_duplicates};
     my $overwrite = $self->{param}{overwrite};
+    my $scheduler = $self->{config}{jobsys};
     
     my $readsfiles_out = ();
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
@@ -981,7 +982,7 @@ sub run_nextclip {
             
             my $opts->{source} = ("nextclip-$nextclip_version");
             $opts->{jobname} = "NextClip_$jobname";
-            $opts->{log} = "$log_path/nextclip_run_log.lsf";
+            $opts->{log} = "$log_path/nextclip_run_log.$scheduler";
             $opts->{threads} = 1;
             
             my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1068,11 +1069,12 @@ sub run_fastqc {
     my $queue = $self->{config}{queue};
     my $fastqc_version = $self->{config}{fastqc_version};
     my $overwrite = $self->{param}{overwrite};
+    my $scheduler = $self->{config}{jobsys};
     
     # Since FastQC gets run twice, we need to set two different log file names to prevent the later ones overwriting the earlier ones. 
     my $fastqc_log_path = "$log_path/fastqc_";
-    if ($self->{config}{trimming_done}) { $fastqc_log_path .= "trimmed.lsf"; }
-    else                                { $fastqc_log_path .= "untrimmed.lsf"; }
+    if ($self->{config}{trimming_done}) { $fastqc_log_path .= "trimmed.$scheduler"; }
+    else                                { $fastqc_log_path .= "untrimmed.$scheduler"; }
     
     my $outfiles = ();
     READS: foreach my $readfile (@$readsfiles) {
@@ -1215,6 +1217,7 @@ sub run_trimming {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{trimming_memory};
     my $readtype = $self->{config}{reads_type};
+    my $scheduler = $self->{config}{jobsys};
     
     my $outfiles = ();
     if ($run_trimming eq 'no') {
@@ -1274,7 +1277,7 @@ sub run_trimming {
         
         my $opts->{source} = ("source trimmomatic-$trimmomatic_version");
         $opts->{jobname} = "Trimming_$jobname";
-        $opts->{log} = "$log_path/trim.lsf";
+        $opts->{log} = "$log_path/trim.$scheduler";
         $opts->{threads} = $threads;
         $opts->{memory} = $memory;
         
@@ -1301,6 +1304,7 @@ sub run_kontaminant {
     my $mem_width = $self->{config}{kontaminant_mem_width};
     my $mem_height = $self->{config}{kontaminant_mem_height};
     my $memory = $self->{config}{filtering_memory};
+    my $scheduler = $self->{config}{jobsys};
     
     foreach my $readfile (@$readsfiles) {
         $self->does_file_exist($readfile);
@@ -1334,7 +1338,7 @@ sub run_kontaminant {
         $cmd .= " -c $reference -d $database -k 21 -o $filtering_output_dir/filtered_ -r $filtering_output_dir/removed_ -p $log_path/kontaminant -n $mem_height -b $mem_width\" ";
         my $opts->{source} = ("kontaminant-$kontaminant_version");
         $opts->{jobname} = "Filter_$jobname";
-        $opts->{log} = "$log_path/kontaminant.lsf";
+        $opts->{log} = "$log_path/kontaminant.$scheduler";
         $opts->{memory} = $memory;
         $opts->{threads} = 1;
         
@@ -1363,6 +1367,7 @@ sub run_flash {
     my $flash_version = $self->{config}{flash_version};
     my $overwrite = $self->{param}{overwrite};
     my $readstype = $self->{config}{reads_type};
+    my $scheduler = $self->{config}{jobsys};
     
     # If running on single-end data, we can't (and don't need to) use flash.
     if ($readstype eq 'single end') {
@@ -1399,7 +1404,7 @@ sub run_flash {
     my $opts->{source} = ("flash-$flash_version");
     $opts->{jobname} = "Flash_$jobname";
     # NOTE: Log for FLASH will be set in the output directory, because there's no guarantee that the $log_path is still directly accessible from where we've changed dir to.
-    $opts->{log} = "flash.lsf";
+    $opts->{log} = "flash.$scheduler";
     $opts->{threads} = 1;
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1560,6 +1565,7 @@ sub run_blastn {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{blast_memory};
     my $evalue = $self->{config}{blast_evalue};
+    my $scheduler = $self->{config}{jobsys};
     
     $log_path = $self->directory_check("$log_path/aligners");
     $log_path = $self->directory_check("$log_path/blastn");
@@ -1592,7 +1598,7 @@ sub run_blastn {
     $opts->{jobname} = "BLASTN_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
-    $opts->{log} = "$log_path/".basename($query).".lsf";
+    $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
     print "      $outcmd\n";
@@ -1616,6 +1622,7 @@ sub run_blastx {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{blast_memory};
     my $evalue = $self->{config}{blast_evalue};
+    my $scheduler = $self->{config}{jobsys};
     
     $log_path = $self->directory_check("$log_path/aligners");
     $log_path = $self->directory_check("$log_path/blastx");
@@ -1648,7 +1655,7 @@ sub run_blastx {
     $opts->{jobname} = "BLASTX_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
-    $opts->{log} = "$log_path/".basename($query).".lsf";
+    $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
     print "      $outcmd\n";
@@ -1672,6 +1679,7 @@ sub run_rapsearch {
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{rapsearch_memory};
     my $evalue = $self->{config}{rapsearch_evalue};
+    my $scheduler = $self->{config}{jobsys};
     
     $log_path = $self->directory_check("$log_path/aligners");
     $log_path = $self->directory_check("$log_path/rapsearch");
@@ -1704,7 +1712,7 @@ sub run_rapsearch {
     $opts->{jobname} = "RapSearch_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
-    $opts->{log} = "$log_path/".basename($query).".lsf";
+    $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
     print "      $outcmd\n";
@@ -1729,6 +1737,7 @@ sub run_diamond {
     my $diamond_version = $self->{config}{diamond_version};
     my $overwrite = $self->{param}{overwrite};
     my $memory = $self->{config}{diamond_memory};
+    my $scheduler = $self->{config}{jobsys};
     
     $log_path = $self->directory_check("$log_path/aligners");
     $log_path = $self->directory_check("$log_path/diamond");
@@ -1764,7 +1773,7 @@ sub run_diamond {
     $opts->{jobname} = "Diamond_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
-    $opts->{log} = "$log_path/".basename($query).".lsf";
+    $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
     print "      $outcmd\n";
