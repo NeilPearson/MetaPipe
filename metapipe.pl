@@ -227,8 +227,8 @@ print "Welcome to the Metapipe metagenomics pipeline!
 Run begun at $date_now
 Input parameters have been set as follows:
 
---config         (config file)              $funcs->{param}{configfile}
---data           (input directory)          $funcs->{param}{datadir}
+--config         (config file)              $funcs->{param}{config}
+--data           (input file/directory)     $funcs->{param}{data}
 --log_dir        (log directory)            $funcs->{param}{log_path}
 --output_prefix  (output directory)         $funcs->{param}{output_prefix}";
 
@@ -360,7 +360,9 @@ my $fastqcfiles = $funcs->run_fastqc($readsfiles, $fastqc_firstpass_path);
 
 # Look at those FastQC results; determine appropriate action
 # (Amounts to throwing a minor warning, at most, at this stage)
-$funcs->examine_fastqc_results($fastqcfiles);
+# (Taken this out for now because the unzip utility is missing from the slurm nodes...)
+print "\tNOTE: Temporarily disabled FastQC output inspection due to lack of unzip utility.\n";
+#$funcs->examine_fastqc_results($fastqcfiles);
 
 #ÊTrim the reads 
 # Use trimmomatic. It's a bit of a complex call by the look of it, but I can handle it.
@@ -435,41 +437,61 @@ foreach my $subset (@$subset_sizes) {
     #}
     
     #print "Convert to FASTA\n";
+    # I do this palaver so that I can handle both cases where the input has been split into chunks, and cases where it hasn't.
+    my @input_files = ();   my %input_dirs = ();
     my (@fasta_files, @jobs) = ();
-    foreach my $chunk (1..$funcs->{param}{num_chunks}) {
-        print "    chunk $chunk - ";
-        my $chunkdir = "$subsample_dir/$subset";
-        my $chunk_o_reads = "$chunkdir/$chunk.fastq";
-        
-        my ($fasta_file, $conversion_jobs) = $funcs->convert_fastq_to_fasta($chunk_o_reads, $chunkdir);
+    if ($funcs->{param}{num_chunks}) {
+        foreach my $chunk (1..$funcs->{param}{num_chunks}) {
+            my $chunkdir = "$subsample_dir/$subset";
+            my $chunk_o_reads = "$chunkdir/$chunk.fastq";
+            push @input_files, $chunk_o_reads;
+            $input_dirs{$chunk_o_reads} = $chunkdir;
+        }
+    }
+    else {
+        my $chunk_o_reads = "$subsample_dir/$subset.fastq";
+        push @input_files, $chunk_o_reads;
+        $input_dirs{$chunk_o_reads} = $subsample_dir;
+    }
+    
+    foreach my $chunkfile (@input_files) {
+        print "    chunk $chunkfile - ";
+        my ($fasta_file, $conversion_jobs) = $funcs->convert_fastq_to_fasta($chunkfile, $input_dirs{$chunkfile});
         push @fasta_files, $fasta_file;
         if ($conversion_jobs) {
             push @jobs, @$conversion_jobs;
         }
     }
+    
     # Wait for these all to finish before going further
     if (@jobs) { my $done = $funcs->done_when_its_done(\@jobs); }
+    
+    # Do any final stuff on those new files
+    foreach my $fasta_file (@fasta_files) {
+        my $output_reads = `wc -l $fasta_file`;
+        chomp $output_reads;
+        print "Written $output_reads FASTA reads to file ".basename($fasta_file)."\n";
+        
+        $funcs->remove_trailing_newlines($fasta_file);
+        unless(-e $fasta_file) { print "ERROR: Failed to create FASTA file\n  $fasta_file\n"; }
+        $funcs->does_file_exist($fasta_file); 
+    }
     
     my %alignment_results = ();
     my %alignment_jobs = ();
     print "Launching alignments for...\n";
-    foreach my $chunk (1..$funcs->{param}{num_chunks}) {
-        print "  chunk $chunk\n";
-        my $chunkdir = "$subsample_dir/$subset";
-        my $chunk_o_reads = "$chunkdir/$chunk.fasta";
+    foreach my $fasta_file (@fasta_files) {
+        print "  chunk $fasta_file\n";
         
         #print "Run selected alignments!\n";
-        my ($results, $jobs) = $funcs->run_alignments($chunk_o_reads);
+        my ($results, $jobs) = $funcs->run_alignments($fasta_file);
         
         # $alignment_results is an array reference, containing file paths.
         # $alignment_jobs is a hash of arrays reference, organised by aligner.
         # Sort these out, so we can get all result files for a given aligner.
-        foreach my $i (1..@$results) {
-            $i--;
-            my $file = $results->[$i];
-            
-            my $aligner_used = $funcs->get_aligner_used($file);
-            push @{$alignment_results{$aligner_used}}, $file;
+        foreach my $alnfile (@$results) {
+            my $aligner_used = $funcs->get_aligner_used($alnfile);
+            push @{$alignment_results{$aligner_used}}, $alnfile;
         }
         
         foreach my $aligner (@$aligners) {

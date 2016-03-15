@@ -1,5 +1,6 @@
 #!/usr/bin/perl -w
 use strict;
+use File::Basename;
 
 my $file = $ARGV[0];
 my $check_n_characters = $ARGV[1];

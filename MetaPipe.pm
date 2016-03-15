@@ -44,6 +44,12 @@ sub assign_parameters {
     
     $self->{param}{halt_at} = shift;
     
+    # Check for non-optional inputs here.
+    if (!$self->{param}{config}) { die "ERROR: Config file input missing. Use the --config flag to supply one.\n"; }
+    $self->does_file_exist($self->{param}{config});
+    if (!$self->{param}{data}) { die "ERROR: Data file/directory input missing. Use the --data flag to supply one.\n"; }
+    if (!$self->{param}{output_prefix}) { die "ERROR: Output prefix input missing. Use the --output_prefix flag to supply one.\n"; }
+    
     if ($self->{param}{num_chunks}) {
         if ($self->{param}{num_chunks} =~ /^[0-9]+$/) {
             $self->{param}{num_chunks} = int $self->{param}{num_chunks};
@@ -80,6 +86,11 @@ sub assign_parameters {
             if ($self->{config}{use_diamond} eq 'yes') { $self->{param}{diamond} = 1; }
         }
     }
+    
+    if ($self->{param}{num_chunks} == 1) {
+        # If this is set to 1, it should be treated exactly the same as not being set at all. 
+        $self->{param}{num_chunks} = ();
+    }
 }
 
 sub submit_job {
@@ -108,7 +119,7 @@ sub submit_job {
         my $str = ();
         # First, source relevant software.
         if ($opts->{source}) {
-            foreach my $src (@$opts->{source}) { $str .= "source $src; " }
+            foreach my $src (@{$opts->{source}}) { $str .= "source $src; " }
         }
         # Start command - add threads, queue, log
         $str .= "bsub -n ".$opts->{threads}." -q ".$opts->{queue}." -oo ".$opts->{log}." ";
@@ -122,10 +133,10 @@ sub submit_job {
             my $dependency_string = ();
             if (ref $opts->{depend} eq 'ARRAY') {
                 my @dep = ();
-                foreach my $job (@$opts->{depend}) { push @dep, "ended($job)"; }
-                $str .= ' -w "'.join " && ", @dep.'" ';
+                foreach my $job (@{$opts->{depend}}) { push @dep, "ended($job)"; }
+                $str .= '-w "'.join " && ", @dep.'" ';
             }
-            else { $str .= ' -w "ended('.$opts->{depend}.')" '; }
+            else { $str .= '-w "ended('.$opts->{depend}.')" '; }
         }
         # Add command string (note, it's single-quoted; I don't have to worry about interpolating into $cmd here, and it will prevent interference from special characters etc.)
         $str .= "'".$cmd."'";
@@ -138,57 +149,35 @@ sub submit_job {
         return ($str, $jobs);
     }
     elsif ($scheduler eq 'slurm') {
-        # SLURM can do everything LSF can do, but it makes you work a bit harder for it.
-        #ÊI'll have to create a shell script, in which the job parameters are set through some weird non-standard comments, then the actual command ($cmd) invoked with srun.
-        # (I think multiple commands can be invoked in series that way, if need be - though I won't here).
-        # That shell script can then be called via sbatch. 
-        
-        # Presumably, the shell script can be deleted once I've called it; but if I want to come back and run a command again, I want that shell script around in order to save myself some effort. Let's make a directory in the base of the $output_prefix dir, that lets us keep hold of these scripts.
-        # And let's append the sbatch call onto the end of $cmd, in square rackets or something, when we return it at the end of this function. Yeah. 
-        # Sbatch shell scripts. We'll need to look in the slurmscripts dir and get the highest number, then increment that.
-        # SLURM can write stdout and stderr to different files; wonder if it can be made to write to the same one?
-        
-        # Let's do some setup, if this is the first time we're running a slurm job here.
-        # Otherwise, increment the job counter so we make a new shell script.
-        if (!$self->{config}{slurmscriptid}) {
-            $self->{config}{slurmscriptid} = 1;
-            $self->directory_check("$output_prefix/logs/slurmscripts");
-        }
-        else {
-            $self->{config}{slurmscriptid} ++;
-        }
-        
-        my $slurmscript = '#!/bin/bash';
-        $slurmscript .= "\n#SBATCH -p ".$opts->{queue};
-        $slurmscript .= "\n#SBATCH -n ".$opts->{threads};
-        $slurmscript .= "\n#SBATCH --mem ".$opts->{memory};
-        
-        # Need to redirect output as well. This is where the log setting comes in.
-        # Note that STDOUT (-o) and STDERR (-e) are directed tot he same place.
-        $slurmscript .= "\n#SBATCH -o".$opts->{log}; 
-        $slurmscript .= "\n#SBATCH -e ".$opts->{log};
-        
-        # Do I need to worry about the time setting? (No - it can be left out, presumably leaving time-based limits to the queue's default).
-        
-        # From this point, we're basically just making a shell script. Source what we need, then add the actual command.
+        # Slurm jobs can be set up in much the same way as LSF jobs, but there are enough differences between the two to justify a separate implementation here.
+        my $str = ();
+        # First, source relevant software.
         if ($opts->{source}) {
-            foreach my $src (@$opts->{source}) { $slurmscript .= "\nsource $src;" }
+            foreach my $src (@{$opts->{source}}) { $str .= "source $src; " }
         }
-        $slurmscript .= "\n$cmd\n";
+        # Start command - add threads, queue, log
+        $str .= "sbatch -c ".$opts->{threads}." -p ".$opts->{queue}." -o ".$opts->{log}." -e ".$opts->{log}." "; # Note that output and error go to the same log file
+        # Add job name, if one has been set
+        if ($opts->{jobname}) { $str .= "-J ".$opts->{jobname}." " }
+        # Add memory
+        $str .= '--mem '.$opts->{memory}." ";
+        # Add dependencies
+        if ($opts->{depend}) {
+            my $dependency_string = ();
+            if (ref $opts->{depend} eq 'ARRAY') {
+                $str .= '--dependency afterok:'.join ":", @{$opts->{depend}}.' ';
+            }
+            else { $str .= '--dependency afterok:'.$opts->{depend}.' '; }
+        }
+        # Add command string (note, it's single-quoted; I don't have to worry about interpolating into $cmd here, and it will prevent interference from special characters etc.)
+        $str .= "--wrap '".$cmd."'";
         
-        # Write to the appropriate file, numbered $self->{config}{slurmscriptid}
-        my $slurmfile = "$output_prefix/logs/slurmscripts/slurm_".$self->{config}{slurmscriptid}.".sh";
-        open(SLURM, ">", $slurmfile) or die "ERROR: Unable to create SLURM job file\n  $slurmfile\n";
-        print SLURM $slurmscript;
-        close SLURM;
-        
-        # The job can now be executed!
-        my $r1jobs = `sbatch $slurmfile`;
+        # Submit and get the job ID
+        my $r1jobs = `$str`;
         my $jobs = $self->extract_list_of_jobs($r1jobs);
         
         # Return the full command constructed, and the job ID.
-        # Note: I'll return the slurm shell script here instead, for reason outlined above.
-        return ($slurmfile, $jobs);
+        return ($str, $jobs);
     }
     else {
         die "ERROR: Unrecognised job scheduler '$scheduler'\n";
@@ -202,6 +191,7 @@ sub read_config_file {
     # It looks, reasonably enough, as though there are distinct databases for each alignment tool. Make sure they're distinguished.
     # Also include version numbers of various software! This makes switching versions that bit easier.
     my $configfile = $self->{param}{config};
+    $self->does_file_exist($configfile);
     
     open(CONFIG, "<", $configfile) or die "ERROR: Cannot open config file\n  $configfile\n$!\n";
     my @config = <CONFIG>;
@@ -251,7 +241,12 @@ sub does_file_exist {
     }
     
     unless (-e $file) {
-        die "ERROR: File\n  $file\ndoes not exist\n";
+        die "ERROR: File\n  $file\ndoes not exist.\n";
+    }
+    
+    # Also check size of file; die if it's zero bytes.
+    if (-z $file) {
+        die "ERROR: File\n  $file\nis empty (0 bytes).\n";
     }
 }
 
@@ -294,7 +289,9 @@ sub copy_raw_reads {
     my @jobs = ();
     print "Copying raw reads to\n  $file_output_prefix\n";
     foreach my $file (@$files) {
-        # Check if it's there first
+        # Check if it exists
+        $self->does_file_exist($file);
+        # Check if it's in the output location already
         my $bn = basename($file);
         if ((-e "$file_output_prefix/$bn") && (!$overwrite)) { print "File\n $file_output_prefix/$bn\nexists; skipping copy.\n"; }
         
@@ -304,6 +301,7 @@ sub copy_raw_reads {
         push @$newfiles, "$file_output_prefix/$bn";
     }
     $self->done_when_its_done(\@jobs);
+    foreach my $file (@$newfiles) { $self->does_file_exist($file); } 
     return $newfiles;
 }
 
@@ -324,6 +322,7 @@ sub dechunk_and_unzip {
         my @readfiles = ();
         FILES: foreach my $file (@$files) {
             chomp $file;
+            $self->does_file_exist($file);
             if ($file =~ /_R$read\.fastq/) { $readfile = $file; last FILES;  }
             elsif ($file =~ /_R$read\_[0-9]+\.fastq/) { push @readfiles, $file; }
         }
@@ -399,6 +398,7 @@ sub dechunk_and_unzip {
         }
         my $outfiles = ();
         push @$outfiles, $readfile;
+        foreach my $outfile (@$outfiles) { $self->does_file_exist($outfile); }
         return $outfiles;
     }
     else {
@@ -408,6 +408,7 @@ sub dechunk_and_unzip {
             my $r2files = $self->dechunk_and_unzip($files, 2);
             push @$r1files, @$r2files;
         }
+        foreach my $outfile (@$r1files) { $self->does_file_exist($outfile); }
         return $r1files;
     }
 }
@@ -427,12 +428,12 @@ sub count_fastq_reads {
     
     $self->does_file_exist($fastq_file);
     
-    my $reads = `wc -l $fastq_file`;
+    my $count = `wc -l $fastq_file`;
     
     # Error checking
     
-    $reads = $reads / 4;
-    return $reads;
+    $count = $count / 4;
+    return $count;
 }
 
 sub get_fastq_read_ids {
@@ -616,7 +617,7 @@ sub rechunk {
     
     my @chunk_files = ();
     # We may not wish to do any rechunking (in which case we should just return $readfile)
-    if ($num_chunks == 1) {
+    if (!$num_chunks) {
         push @chunk_files, $readfile;
     }
     else {
@@ -700,7 +701,6 @@ sub rechunk {
         }
         $chunkdir = $self->directory_check("$dir/$subset");
         
-        
         # Now, I need to pick out the reads from the input file, and direct them to an output file.
         # These are potentially very big files, so they should be read line by line. That would need a little read buffer type thing, since we want
         # chunks of 4 lines at a time.
@@ -733,6 +733,7 @@ sub rechunk {
         @chunk_files = keys %chunk_files;
         $self->remove_trailing_newlines(\@chunk_files);
     }
+    foreach my $file (@chunk_files) { $self->does_file_exist($file); }
     return \@chunk_files;
 }
 
@@ -745,7 +746,7 @@ sub remove_trailing_newlines {
     my @files = ();
     if (ref $file eq 'ARRAY') { @files = @$file; }
     else                      { push @files, $file; }
-    
+    foreach my $file (@files) { $self->does_file_exist($file); }
     foreach my $f (@files) {
         my $gibberish = '/./,$!d;/^\n*$/{$d;N;};/\n$/ba';
         `sed -e :a -e '$gibberish' $f`;
@@ -793,42 +794,61 @@ sub done_when_its_done {
     my $check_jobs = shift;
     my $scheduler = $self->{config}{jobsys};
     
+    # A list of jobs should always be supplied.
+    if (!$check_jobs) { die "ERROR: Failed to find a list of job IDs where expected.\n"; }
+    
     # Check the list of current jobs every minute or so, until all the input jobs have disappeared
     # from the list.
     my @intersection = ();
     my $checks = ();
+    my $waited = 0;
+    my $failed = 0;
+    my $failure_attempts = 20;
     do {
         $checks ++;
         # Get running job IDs using the relevant command for the job scheduler, and awk
         my $running_jobs = ();
-        if ($scheduler eq 'lsf')      { `bjobs | awk '{print \$1}'`; }
-        elsif ($scheduler eq 'slurm') { `squeue -u \$USER | awk '{print \$1}'`; }
-        my @running_jobs = split /\n/, $running_jobs;
-        my $line = shift @running_jobs;
+        if ($scheduler eq 'lsf')      { $running_jobs = `bjobs | awk '{print \$1}'`; }
+        elsif ($scheduler eq 'slurm') { $running_jobs = `squeue -u \$USER | awk '{print \$1}'`; }
         
-        # Compare using List::Compare
-        # BUT only if the scheduler has indeed returned a list of jobs!
-        # (Don't know what slurm does when it fails to return a list yet. Update once I do...)
-        unless ($line =~ /Please wait/) {
-            my $lc = List::Compare->new($check_jobs, \@running_jobs);
-            @intersection = $lc->get_intersection;
+        # This should never, ever be empty, because if it is, it means either the job scheduler is not working as it ought to be, or much more likely, something has gone wrong with this code. The pipeline is always run as a job, so if nothing else, it should find itself.
+        #if (!$running_jobs) { die "ERROR: Job scheduler cannot find a list of running jobs.\n"; }
+        # WRONG. The job scheduler will intermittently fail to return a list of running jobs, for various and sundry reasons that ultimately make no difference to this pipeline (because the jobs continue to run regardless). It always sorts itself out when left alone for a bit, but if the pipeline happens to check for jobs in that time, it will find one - and will wrongly conclude that all jobs have finished and the pipeline can proceed. We need to make it... not do that. That's what $failed is for.
+        # To counteract the possibility of getting stuck in an infinite loop, though, the number of failed attempts to access the job list should be capped - albeit pretty generously. 
+        if ($running_jobs) {
+            $failed = 0;
+            my @running_jobs = split /\n/, $running_jobs;
+            my $line = shift @running_jobs;
+            
+            # Compare using List::Compare
+            # BUT only if the scheduler has indeed returned a list of jobs!
+            # (Don't know what slurm does when it fails to return a list yet. Update once I do...)
+            unless ($line =~ /Please wait/) {
+                my $lc = List::Compare->new($check_jobs, \@running_jobs);
+                @intersection = $lc->get_intersection;
+            }
+        }
+        else {
+            $failed ++;
+            if ($failed >= $failure_attempts) { die "ERROR: Unable to access list of running jobs after $failure_attempts attempts.\n"; }
         }
         
         # If any jobs in the checklist are still active, then wait a short time before checking again.
         # No point checking ten billion times per minute.
-        if (@intersection >= 1) {
-            if ($checks <= 10)    { sleep 5; }
-            elsif ($checks <= 20) { sleep 10; }
-            else                  { sleep 15; }
+        if ((@intersection >= 1) || ($failed > 0)) {
+            if ($checks <= 10)    { sleep 5; $waited += 5; }
+            elsif ($checks <= 20) { sleep 10; $waited += 10; }
+            else                  { sleep 15; $waited += 15; }
         }
     }
-    until (@intersection == 0);
+    until ((@intersection == 0) && ($failed == 0));
     
     # Wait another 60 seconds; perl/the cluster apparently needs this in order to sort out newly created files.
     sleep 60;
+    $waited += 60;
     
     my $time_now = localtime();
-    print "All pending jobs for this step completed by $time_now\n";
+    print "All pending jobs for this step completed by $time_now\n(Waited for $waited seconds)\n";
     return "Done";
 }
 
@@ -934,23 +954,28 @@ sub run_nextclip {
     my $overwrite = $self->{param}{overwrite};
     my $scheduler = $self->{config}{jobsys};
     
+    if (!$readsfiles) { die "ERROR: Reads files not supplied.\n"; }
+    if (@$readsfiles == 0) { die "ERROR: Empty reads file array.\n"; }
+    foreach my $file (@$readsfiles) { $self->does_file_exist($file); }
+    
     my $readsfiles_out = ();
     # Are we actually going to run NextClip? If not, just return the input files and don't do anything.
     if ($run_nextclip eq 'no') {
-        push @$readsfiles_out, @$readsfiles;
+        $readsfiles_out = $readsfiles;
     }
     # We may have a single-end run, which nextclip can't handle. That means we have to do something else.
     elsif ($self->{config}{reads_type} eq 'single end') {
-        print "This is a single-end run, so NextClip cannot be run.\n";
+        print "\tThis is a single-end run, so NextClip cannot be run.\n";
         # If the user has requested removal of PCR duplicates, then we need to run another sub that can do it.
         # Otherwise, we just need to return a warning, pass the filepath back, and continue merrily on our way.
         if ($remove_pcr_duplicates eq 'yes') {
-            print "PCR duplicates will be removed by Metapipe's the remove_pcr_duplicates function instead.\n";
+            print "PCR duplicates will be removed by Metapipe's remove_pcr_duplicates function instead.\n";
             my $outfile = $self->remove_pcr_duplicates($readsfiles->[0]);
             push @$readsfiles_out, $outfile;
         }
         else {
-            print "No further action taken.\n";
+            print "\tNo further action taken.\n";
+            $readsfiles_out = $readsfiles;
         }
     }
     else {
@@ -969,9 +994,9 @@ sub run_nextclip {
         # Check if NextClip files exist. If not, run NextClip; if they do, skip it.
         my $files = $self->find_files($output_path, "results_[ABCD]_*.fastq");
         if ((@$files > 0) && (!$overwrite)) {
-            print "Found existing NextClip output files:\n";
+            print "\tFound existing NextClip output files:\n";
             foreach my $ncfile (@$files) { print "  $ncfile\n"; }
-            print "Skipping NextClip!\n";
+            print "\tSkipping NextClip!\n";
         }
         else {
             # Set up the job
@@ -980,7 +1005,7 @@ sub run_nextclip {
             my $cmd = "nextclip -i $read1file -j $read2file -o $output_path_slash"."results ";
             if ($remove_pcr_duplicates eq 'yes') { $cmd .= "--remove_duplicates "; }
             
-            my $opts->{source} = ("nextclip-$nextclip_version");
+            my $opts->{source} = ["nextclip-$nextclip_version"];
             $opts->{jobname} = "NextClip_$jobname";
             $opts->{log} = "$log_path/nextclip_run_log.$scheduler";
             $opts->{threads} = 1;
@@ -1005,23 +1030,25 @@ sub run_nextclip {
             print "Nextclip reads output files:\n  $read1file_out\n  $read2file_out\n";
             
             my $cmd = "cat $output_path/results_*_R1.fastq > $read1file_out";
-            my $opts->{source} = ("nextclip-$nextclip_version");
-            $opts->{jobname} = "CatR1";
+            my $opts->{source} = ["nextclip-$nextclip_version"];
+            $opts->{jobname} = "Cat_R1";
             $opts->{threads} = 1;
             my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
             print "Concatenation of NextClip results command R1:\n  $outcmd\n";
             $self->done_when_its_done($jobs);
             
             $cmd = "cat $output_path/results_*_R2.fastq > $read2file_out";
-            $opts->{source} = ("nextclip-$nextclip_version");
-            $opts->{jobname} = "CatR1";
+            $opts->{source} = ["nextclip-$nextclip_version"];
+            $opts->{jobname} = "Cat_R2";
             $opts->{threads} = 1;
             ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
-            print "Concatenation of NextClip results command R1:\n  $outcmd\n";
+            print "Concatenation of NextClip results command R2:\n  $outcmd\n";
             $self->done_when_its_done($jobs);
         }
     }
-    
+    if (!$readsfiles_out) { die "ERROR: Output reads files not supplied.\n"; }
+    if (@$readsfiles_out == 0) { die "ERROR: Empty output reads file array.\n"; }
+    foreach my $outfile (@$readsfiles_out) { $self->does_file_exist($outfile); }
     $self->halt('nextclip');
     return $readsfiles_out;
 }
@@ -1030,9 +1057,14 @@ sub remove_pcr_duplicates {
     my $self = shift;
     my $file = shift;
     my $output_prefix = $self->{param}{output_prefix};
+    my $log_path = $self->{param}{log_path};
     my $overwrite = $self->{param}{overwrite};
     my $check_n_characters = $self->{config}{check_first_n_characters};
     my $scriptsdir = $self->{config}{scriptsdir};
+    my $scheduler = $self->{config}{jobsys};
+    
+    if (!$file) { die "ERROR: Reads files not supplied.\n"; }
+    $self->does_file_exist($file);
     
     my $lines_per_read = 4;
     my ($basename, $parentdir, $extension) = fileparse($file, qr/\.[^.]*$/);
@@ -1044,20 +1076,27 @@ sub remove_pcr_duplicates {
     
     # To make a more effective use of cluster memory when running this crude and fairly memory-intensive function, I've moved it off to a separate script.
     # That script is in $scriptsdir.
+    print "Removing PCR duplicates from file\n  $file\n";
     if ((!-e $outfile) || ($overwrite)) {
-        my $jobname = basename($self->{param}{output_prefix});
         my $cmd = "perl $scriptsdir/remove_pcr_duplicates.pl $file ";
         if ($check_n_characters) { $cmd .= "$check_n_characters "; }
         $cmd .= "> $outfile";
-        my $opts->{jobname} = "Remove PCR duplicates";
+        my $opts->{jobname} = "Remove_PCR_duplicates";
         $opts->{threads} = 1;
-        $self->remove_trailing_newlines($outfile);
+        $opts->{log} = "$log_path/deduplicate_$basename.$scheduler";
         
         my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
+        print "PCR duplicate removal command:\n  $outcmd\n";
         $self->done_when_its_done($jobs);
+        $self->remove_trailing_newlines($outfile);
+    }
+    else {
+        print "Output file exists; skipping this step!\n";
     }
     
-    print "PCR duplicates removed in reads file\n  $outfile\n";
+    #print "PCR duplicates removed in reads file\n  $outfile\n";
+    $self->does_file_exist($outfile);
+    
     return $outfile;
 }
 
@@ -1070,6 +1109,10 @@ sub run_fastqc {
     my $fastqc_version = $self->{config}{fastqc_version};
     my $overwrite = $self->{param}{overwrite};
     my $scheduler = $self->{config}{jobsys};
+    
+    if (!$readsfiles) { die "ERROR: Reads files not supplied.\n"; }
+    if (@$readsfiles == 0) { die "ERROR: Empty reads file array.\n"; }
+    foreach my $file (@$readsfiles) { $self->does_file_exist($file); }
     
     # Since FastQC gets run twice, we need to set two different log file names to prevent the later ones overwriting the earlier ones. 
     my $fastqc_log_path = "$log_path/fastqc_";
@@ -1084,10 +1127,13 @@ sub run_fastqc {
         # How can I check if this step has been done already?
         # Look for output files in the output path, of course.
         unless ($overwrite) {
-            my $files = $self->find_files($output_path, '*fastqc.html');
-            if (@$files > 0) {
+            my $zippedfiles = $self->find_files($output_path, '*fastqc.zip');
+            my $unzippedfiles = $self->find_files($output_path, '*fastqc.html');
+            my @files = @$zippedfiles;
+            push @files, @$unzippedfiles;
+            if (@files > 0) {
                 print "Found existing FastQC output files:\n";
-                foreach my $fqfile (@$files) { print "  $fqfile\n"; }
+                foreach my $fqfile (@files) { print "  $fqfile\n"; }
                 print "Skipping FastQC!\n";
                 push @$outfiles, "$output_path/$fastqcfile";
                 next READS;
@@ -1100,7 +1146,7 @@ sub run_fastqc {
         # Let's go with 'all', which we activate by typing 'A'; hence the echo statement in the command below.
         # Note: may or may not remain necessary now that I've tried to fix the way logs used to overwrite each other. 
         my $cmd = "fastqc $readfile --outdir $output_path; ".'echo "A"';
-        my $opts->{source} = ("fastqc-$fastqc_version");
+        my $opts->{source} = ["fastqc-$fastqc_version"];
         $opts->{jobname} = "FastQC_$jobname";
         $opts->{log} = "$fastqc_log_path";
         $opts->{threads} = 1;
@@ -1111,7 +1157,7 @@ sub run_fastqc {
         
         push @$outfiles, "$output_path/$fastqcfile"
     }
-    
+    foreach my $file (@$outfiles) { $self->does_file_exist($file); }
     $self->halt('fastqc');
     return ($outfiles);
 }
@@ -1120,6 +1166,10 @@ sub examine_fastqc_results {
     my $self = shift;
     my $fastqc_results_files = shift;
     my $trimming_done = shift;
+    
+    if (!$fastqc_results_files) { die "ERROR: FastQC results files not supplied.\n"; }
+    if (@$fastqc_results_files == 0) { die "ERROR: Empty FastQC results file array.\n"; }
+    foreach my $file (@$fastqc_results_files) { $self->does_file_exist($file); }
     
     foreach my $fastqc_results_file (@$fastqc_results_files) {
         # Unzip $fastqc_results_file
@@ -1219,12 +1269,18 @@ sub run_trimming {
     my $readtype = $self->{config}{reads_type};
     my $scheduler = $self->{config}{jobsys};
     
+    if (!$readsfiles) { die "ERROR: Reads files not supplied.\n"; }
+    if (@$readsfiles == 0) { die "ERROR: Empty reads file array.\n"; }
+    foreach my $file (@$readsfiles) { $self->does_file_exist($file); }
+    
     my $outfiles = ();
     if ($run_trimming eq 'no') {
-        print "    Config file requests no trimming; skipping this step\n";
+        print "\tConfig file requests no trimming; skipping this step\n";
         push @$outfiles, @$readsfiles;
     }
     else {
+        $self->does_file_exist($adaptersfile);
+        
         foreach my $readfile (@$readsfiles) {
             $self->does_file_exist($readfile);
         }
@@ -1275,7 +1331,7 @@ sub run_trimming {
         # (It's a bunch of trimming parameters).
         $cmd .= " ILLUMINACLIP:$adaptersfile:$seed_mismatches:$palindrome_clip_threshold:$simple_clip_threshold SLIDINGWINDOW:$trimming_sliding_window MINLEN:$trimming_min_length ";
         
-        my $opts->{source} = ("source trimmomatic-$trimmomatic_version");
+        my $opts->{source} = ["source trimmomatic-$trimmomatic_version"];
         $opts->{jobname} = "Trimming_$jobname";
         $opts->{log} = "$log_path/trim.$scheduler";
         $opts->{threads} = $threads;
@@ -1285,7 +1341,7 @@ sub run_trimming {
         print "TRIMMOMATIC command:\n  $outcmd\n";
         $self->done_when_its_done($jobs);
     }
-    
+    foreach my $file (@$outfiles) { $self->does_file_exist($file); }
     $self->halt('trimming');
     return $outfiles;
 }
@@ -1306,9 +1362,9 @@ sub run_kontaminant {
     my $memory = $self->{config}{filtering_memory};
     my $scheduler = $self->{config}{jobsys};
     
-    foreach my $readfile (@$readsfiles) {
-        $self->does_file_exist($readfile);
-    }
+    if (!$readsfiles) { die "ERROR: Reads files not supplied.\n"; }
+    if (@$readsfiles == 0) { die "ERROR: Empty reads file array.\n"; }
+    foreach my $readfile (@$readsfiles) { $self->does_file_exist($readfile); }
     
     my $outfiles = ();
     my ($r1outfile, $r2outfile) = ();
@@ -1336,7 +1392,7 @@ sub run_kontaminant {
             $cmd .= " -$c $readfile";
         }
         $cmd .= " -c $reference -d $database -k 21 -o $filtering_output_dir/filtered_ -r $filtering_output_dir/removed_ -p $log_path/kontaminant -n $mem_height -b $mem_width\" ";
-        my $opts->{source} = ("kontaminant-$kontaminant_version");
+        my $opts->{source} = ["kontaminant-$kontaminant_version"];
         $opts->{jobname} = "Filter_$jobname";
         $opts->{log} = "$log_path/kontaminant.$scheduler";
         $opts->{memory} = $memory;
@@ -1347,12 +1403,10 @@ sub run_kontaminant {
         $self->done_when_its_done($jobs);
     }
     else {
-        print "Config file requests no filtering; skipping this step\n";
-        foreach my $readfile (@$readsfiles) {
-            push @$outfiles, $readfile;
-        }
+        print "\tConfig file requests no filtering; skipping this step\n";
+        $outfiles = $readsfiles;
     }
-    
+    foreach my $file (@$outfiles) { $self->does_file_exist($file); }
     $self->halt('kontaminant');
     return $outfiles;
 }
@@ -1369,9 +1423,13 @@ sub run_flash {
     my $readstype = $self->{config}{reads_type};
     my $scheduler = $self->{config}{jobsys};
     
+    if (!$readsfiles) { die "ERROR: Reads files not supplied.\n"; }
+    if (@$readsfiles == 0) { die "ERROR: Empty reads file array.\n"; }
+    foreach my $readfile (@$readsfiles) { $self->does_file_exist($readfile); }
+    
     # If running on single-end data, we can't (and don't need to) use flash.
     if ($readstype eq 'single end') {
-        print "FLASH is unnecessary for single-end runs.\n";
+        print "\tFLASH is unnecessary for single-end runs.\n";
         $self->halt('flash');
         return $readsfiles->[0];
     }
@@ -1401,7 +1459,7 @@ sub run_flash {
     
     my $jobname = basename($self->{param}{output_prefix});
     my $cmd = "flash $read1file $read2file -M 150 -o $output_file";
-    my $opts->{source} = ("flash-$flash_version");
+    my $opts->{source} = ["flash-$flash_version"];
     $opts->{jobname} = "Flash_$jobname";
     # NOTE: Log for FLASH will be set in the output directory, because there's no guarantee that the $log_path is still directly accessible from where we've changed dir to.
     $opts->{log} = "flash.$scheduler";
@@ -1451,19 +1509,12 @@ sub convert_fastq_to_fasta {
     # This function is one of a few homebrewed scripts, which I'll need to include a path to as a config file option.
     my $jobname = basename($self->{param}{output_prefix});
     my $cmd = "perl $scriptsdir/fastq_to_fasta.pl $fastq_filepath > $fasta_filepath";
-    my $opts->{jobname} = "FASTQ to FASTA";
+    my $opts->{jobname} = "FASTQ_to_FASTA";
     $opts->{threads} = 1;
     
-    my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
-    $self->done_when_its_done($jobs);
-    
-    my $output_reads = `wc -l $fasta_filepath`;
-    chomp $output_reads;
-    print "Written $output_reads FASTA reads to file ".basename($fasta_filepath)."\n";
-    
-    $self->remove_trailing_newlines($fasta_filepath);
-    unless(-e $fasta_filepath) { print "ERROR: Failed to create FASTA file\n  $fasta_filepath\n"; }
-    return ($fasta_filepath);
+    # Note that we just kick the jobs off and return job IDs here, since it's very likely we'll want to do this to multiple files at the same time.
+    my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);    
+    return ($fasta_filepath, $jobs);
 }
 
 sub list_aligners {
@@ -1547,7 +1598,7 @@ sub run_alignments {
         }
     }
     
-    #if (@jobs > 0) { my $done = $self->done_when_its_done(\@jobs); }
+    if (@jobs > 0) { my $done = $self->done_when_its_done(\@jobs); }
     $self->halt('alignment');
     return (\@results, \%jobs);
 }
@@ -1594,7 +1645,7 @@ sub run_blastn {
     $jobname .= "_$queryname";
     
     my $cmd = "blastn -num_threads $threads -db $db -query $query -evalue $evalue -out $outfile";
-    my $opts->{source} = ("blast-$blast_version");
+    my $opts->{source} = ["blast-$blast_version"];
     $opts->{jobname} = "BLASTN_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
@@ -1651,7 +1702,7 @@ sub run_blastx {
     $jobname .= "_$queryname";
     
     my $cmd = "blastx -num_threads $threads -db $db -query $query -evalue $evalue -out $outfile";
-    my $opts->{source} = ("blast-$blast_version");
+    my $opts->{source} = ["blast-$blast_version"];
     $opts->{jobname} = "BLASTX_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
@@ -1708,7 +1759,7 @@ sub run_rapsearch {
     $jobname .= "_$queryname";
     
     my $cmd = "rapsearch -q $query -d $db -o $outfile -z $threads -e $evalue";
-    my $opts->{source} = ("rapsearch-$rapsearch_version");
+    my $opts->{source} = ["rapsearch-$rapsearch_version"];
     $opts->{jobname} = "RapSearch_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
@@ -1769,7 +1820,7 @@ sub run_diamond {
     $jobname .= "_$queryname";
     
     my $cmd = "diamond blastx -d $db -q $query -o $outfile -t $tempdir --threads $threads";
-    my $opts->{source} = ("diamond-$diamond_version");
+    my $opts->{source} = ["diamond-$diamond_version"];
     $opts->{jobname} = "Diamond_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
@@ -1814,6 +1865,7 @@ sub set_up_megan_command_file {
         
     }
     close COMFILE;
+    $self->does_file_exist($commandfile);
 }
 
 sub run_megan {
@@ -1846,8 +1898,8 @@ sub run_megan {
     
     my $jobname = basename($self->{param}{output_prefix});
     my $cmd = "export DISPLAY=$display; MEGAN -g -c $commandfile -L $megan_license_file";
-    my $opts->{source} = ("MEGAN-$megan_version");
-    $opts->{depend} = $prerequisite_jobs;
+    my $opts->{source} = ["MEGAN-$megan_version"];
+    #$opts->{depend} = $prerequisite_jobs;
     $opts->{jobname} = "MEGAN_$jobname";
     $opts->{threads} = 1;
     $opts->{memory} = $memory;

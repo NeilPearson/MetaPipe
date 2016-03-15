@@ -1,6 +1,6 @@
 # Paths to resources
 scriptsdir  /tgac/workarea/group-si/metapipe
-adaptersfile    /tgac/scratch/pearsonn/metapipe/adapters/metapipe_adapters.fa
+adaptersfile    /tgac/workarea/group-si/leggettr/airseq/airseq_adapters.fa
 kontaminant_database    /data/references/databases/kontaminants
 blastn_database /tgac/workarea/group-si/pearsonn/databases/nt
 blastx_database /tgac/workarea/group-si/leggettr/databases/blast_10Dec2014/nr
@@ -10,25 +10,23 @@ human_reference phix_174
 
 # Job scheduler information
 jobsys  slurm
-queue   Test128
-threads 4
-rotate_queues   yes
-queuelist   Test128,Prod128,Test256,Prod256
-memory  8000
+queue   tgac-long
+threads 8
+memory  16384
 
 # Do we want to copy the original reads into a convenient place within the output directory?
-copy_raw_reads  yes
+copy_raw_reads  no
 
 # Re-chunking parameters
-numchunks   50
+numchunks   20
 
 # NextClip parameters
 run_nextclip    yes
-remove_pcr_duplicates   yes
+remove_pcr_duplicates   no
 check_first_n_characters    100
 
 # Trimming parameters
-run_trimming    yes
+run_trimming    no
 trimming_memory 8000
 trimming_sliding_window 4:20
 trimming_min_length 76
@@ -43,11 +41,11 @@ kontaminant_mem_height  25
 kontaminant_mem_width   80
 
 # BLAST parameters (for both BLASTN and BLASTX)
-blast_memory   8000
+blast_memory   32768
 blast_evalue   0.001
 
 # RapSearch parameters
-rapsearch_memory    8000
+rapsearch_memory    32768
 rapsearch_evalue    0.001
 
 # Diamond parameters
