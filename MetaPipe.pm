@@ -1897,7 +1897,7 @@ sub run_megan {
     $self->set_up_megan_command_file($commandfile, $alignment_file, $fasta_file, $meganfile);
     
     my $jobname = basename($self->{param}{output_prefix});
-    my $cmd = "export DISPLAY=$display; MEGAN -g -c $commandfile -L $megan_license_file";
+    my $cmd = "MEGAN -c $commandfile -L $megan_license_file --commandLineMode";
     my $opts->{source} = ["MEGAN-$megan_version"];
     #$opts->{depend} = $prerequisite_jobs;
     $opts->{jobname} = "MEGAN_$jobname";

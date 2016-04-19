@@ -2,8 +2,8 @@
 scriptsdir  /tgac/workarea/group-si/metapipe
 adaptersfile    /tgac/workarea/group-si/leggettr/airseq/airseq_adapters.fa
 kontaminant_database    /data/references/databases/kontaminants
-blastn_database /tgac/workarea/group-si/pearsonn/databases/nt
-blastx_database /tgac/workarea/group-si/leggettr/databases/blast_10Dec2014/nr
+blastn_database /tgac/references/databases/blast/nt_28022016/nt
+blastx_database /tgac/references/databases/blast/nt_28022016/nr
 rapsearch_database  /tgac/workarea/group-si/leggettr/databases/rapsearch_10Dec2014/nr.rapsearch
 diamond_database    /tgac/workarea/group-si/leggettr/databases/diamond_10Dec2014/nr
 human_reference phix_174
@@ -36,16 +36,16 @@ simple_clip_threshold   10
 
 # Filtering parameters
 run_filtering   no
-filtering_memory    000
+filtering_memory    8000
 kontaminant_mem_height  25
 kontaminant_mem_width   80
 
 # BLAST parameters (for both BLASTN and BLASTX)
-blast_memory   32768
+blast_memory   65536
 blast_evalue   0.001
 
 # RapSearch parameters
-rapsearch_memory    32768
+rapsearch_memory    65536
 rapsearch_evalue    0.001
 
 # Diamond parameters
@@ -71,7 +71,7 @@ blast_version   2.2.29
 fastx_toolkit_version   0.0.13.2
 rapsearch_version   2.22
 diamond_version 0.68
-megan_version   5.7.1
+megan_version   5.11.3
 
 # Default aligner usage
 use_blastx  yes
