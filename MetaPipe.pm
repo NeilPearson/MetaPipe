@@ -1254,7 +1254,7 @@ sub run_trimming {
     my $readsfiles = shift;
     my $run_trimming = $self->{config}{run_trimming};
     my $log_path = $self->{param}{log_path};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{trimming_queue};
     my $adaptersfile = $self->{config}{adaptersfile};
     my $seed_mismatches = $self->{config}{seed_mismatches};
     my $palindrome_clip_threshold = $self->{config}{palindrome_clip_threshold};
@@ -1610,7 +1610,7 @@ sub run_blastn {
     my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{blastn_database};
     my $sample_id = $self->{param}{sample_id};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{blast_queue};
     my $threads = $self->{config}{threads};
     my $blast_version = $self->{config}{blast_version};
     my $overwrite = $self->{param}{overwrite};
@@ -1667,7 +1667,7 @@ sub run_blastx {
     my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{blastx_database};
     my $sample_id = $self->{param}{sample_id};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{blast_queue};
     my $threads = $self->{config}{threads};
     my $blast_version = $self->{config}{blast_version};
     my $overwrite = $self->{param}{overwrite};
@@ -1724,7 +1724,7 @@ sub run_rapsearch {
     my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{rapsearch_database};
     my $sample_id = $self->{param}{sample_id};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{rapsearch_queue};
     my $threads = $self->{config}{threads};
     my $rapsearch_version = $self->{config}{rapsearch_version};
     my $overwrite = $self->{param}{overwrite};
@@ -1746,9 +1746,9 @@ sub run_rapsearch {
     my $outfile = "$outdir/$query_filename.txt";
     
     unless ($overwrite) {
-        if (-e $outfile) {
+        if (-e "$outfile.m8") {
             print "    Found existing RapSearch output\n      $outfile\n    Skipping RapSearch!\n";
-            return $outfile;
+            return "$outfile.m8";
         }
         #else { print "--No existing file found; proceeding with RapSearch.\n"; }
     }
@@ -1783,7 +1783,7 @@ sub run_diamond {
     my $log_path = $self->{param}{log_path};
     my $db = $self->{config}{diamond_database};
     my $sample_id = $self->{param}{sample_id};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{diamond_queue};
     my $threads = $self->{config}{threads};
     my $diamond_version = $self->{config}{diamond_version};
     my $overwrite = $self->{param}{overwrite};
@@ -1885,7 +1885,7 @@ sub run_megan {
     my $megan_version = $self->{config}{megan_version};
     my $megan_license_file = $self->{config}{megan_license_file};
     #my $log_path = $self->{param}{log_path};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{megan_queue};
     my $aligner_used = $self->get_aligner_used($alignment_file);
     my $memory = $self->{config}{megan_memory};
     my $display = $self->{config}{megan_display};
@@ -1897,8 +1897,53 @@ sub run_megan {
     $self->set_up_megan_command_file($commandfile, $alignment_file, $fasta_file, $meganfile);
     
     my $jobname = basename($self->{param}{output_prefix});
-    my $cmd = "MEGAN -c $commandfile -L $megan_license_file --commandLineMode";
+    my $cmd = "xvfb-run -d MEGAN -c $commandfile -L $megan_license_file --commandLineMode";
     my $opts->{source} = ["MEGAN-$megan_version"];
+    #$opts->{depend} = $prerequisite_jobs;
+    $opts->{jobname} = "MEGAN_$jobname";
+    $opts->{threads} = 1;
+    $opts->{memory} = $memory;
+    $opts->{log} = $log;
+    
+    my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
+    print "    MEGAN command:\n      $outcmd\n";
+    
+    $self->halt('megan');
+    return $meganfile;
+}
+
+sub run_megan_blast2rma {
+    # This runs a standalone tool bundled with MEGAN version 6 and above.
+    # It will, hopefully, resolve problems with X11 that we've been experiencing.
+    # NOTE: This presently doesn't work very well.
+    my $self = shift;
+    my $alignment_file = shift;
+    my $fasta_file = shift;
+    my $output_dir = shift;
+    my $log = shift;
+    my $prerequisite_jobs = shift;
+    my $megan_version = $self->{config}{megan_version};
+    my $megan_license_file = $self->{config}{megan_license_file};
+    #my $log_path = $self->{param}{log_path};
+    my $queue = $self->{config}{megan_queue};
+    my $aligner_used = $self->get_aligner_used($alignment_file);
+    my $memory = $self->{config}{megan_memory};
+    my $alignment_fmt = ();
+    if ($aligner_used eq 'rapsearch') { $alignment_fmt = "RapSearch2Aln"; }
+    elsif ($aligner_used =~ /blast/)  { $alignment_fmt = "BlastTab"; }
+    my $maxmatches = $self->{config}{megan_maxmatches};
+    my $maxexpected = $self->{config}{megan_maxexpected};
+    my $minsupport = $self->{config}{megan_minsupport};
+    my $mincomplexity = $self->{config}{megan_mincomplexity};
+    my $megan_taxafile = $self->{config}{megan_taxafile};
+    my $meganfile = "$output_dir/megan.rma";
+    
+    if (ref $alignment_file eq 'ARRAY') { $alignment_file = join ', ', @$alignment_file; }
+    if (ref $fasta_file eq 'ARRAY')     { $fasta_file = join ', ', @$fasta_file; }
+    
+    my $jobname = basename($self->{param}{output_prefix});
+    my $cmd = "xvfb-run -d blast2rma --in $alignment_file --format $alignment_fmt --reads $fasta_file --maxMatchesPerRead $maxmatches --maxExpected $maxexpected --minSupport $minsupport --verbose --out $meganfile";
+    my $opts->{source} = ["MEGAN-6.3.7"];
     #$opts->{depend} = $prerequisite_jobs;
     $opts->{jobname} = "MEGAN_$jobname";
     $opts->{threads} = 1;

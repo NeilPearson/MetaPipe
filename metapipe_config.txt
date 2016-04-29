@@ -10,7 +10,8 @@ human_reference phix_174
 
 # Job scheduler information
 jobsys  slurm
-queue   tgac-long
+# Default queue - for small odd jobs. Other tasks have their own specific queue selection.
+queue   tgac-short
 threads 8
 memory  16384
 
@@ -27,6 +28,7 @@ check_first_n_characters    100
 
 # Trimming parameters
 run_trimming    no
+trimming_queue  tgac-short
 trimming_memory 8000
 trimming_sliding_window 4:20
 trimming_min_length 76
@@ -36,25 +38,30 @@ simple_clip_threshold   10
 
 # Filtering parameters
 run_filtering   no
+filtering_queue tgac-short
 filtering_memory    8000
 kontaminant_mem_height  25
 kontaminant_mem_width   80
 
 # BLAST parameters (for both BLASTN and BLASTX)
+blast_queue tgac-long
 blast_memory   65536
 blast_evalue   0.001
 
 # RapSearch parameters
+rapsearch_queue tgac-long
 rapsearch_memory    65536
 rapsearch_evalue    0.001
 
 # Diamond parameters
+diamond_queue   tgac-long
 diamond_memory  16000
 
 # MEGAN parameters
 megan_license_file  /tgac/scratch/pearsonn/metapipe/megan_support/licensefile.txt
-megan_taxafile  /tgac/scratch/pearsonn/metapipe/megan_support/gi_taxid_prot2.bin
-megan_memory    12000
+megan_taxafile  /tgac/workarea/collaborators/air-seq/references/ncbi_taxid/gi_taxid_prot.bin
+megan_queue tgac-short
+megan_memory    16000
 megan_display   :0.0
 megan_maxmatches    100
 megan_maxexpected   0.001
