@@ -323,7 +323,10 @@ sub dechunk_and_unzip {
         FILES: foreach my $file (@$files) {
             chomp $file;
             $self->does_file_exist($file);
-            if ($file =~ /_R$read\.fastq/) { $readfile = $file; last FILES;  }
+            # This is not necessarily a very reliable way of telling when you have a paired-end dataset or not. At the time of writing this comment, it also excluded
+            # some cases, leading to the pipeline failint to run. A more general solution would be welcome, but it's a tough thing to generalise. 
+            if ($file =~ /_R$read\.fastq/) { $readfile = $file; last FILES; }
+            elsif ($file =~ /_R$read\_[a-zA-Z]+.*\.fastq/) { $readfile = $file; last FILES; }
             elsif ($file =~ /_R$read\_[0-9]+\.fastq/) { push @readfiles, $file; }
         }
         
@@ -1335,6 +1338,7 @@ sub run_trimming {
         $opts->{jobname} = "Trimming_$jobname";
         $opts->{log} = "$log_path/trim.$scheduler";
         $opts->{threads} = $threads;
+        $opts->{queue} = $queue;
         $opts->{memory} = $memory;
         
         my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1354,7 +1358,7 @@ sub run_kontaminant {
     my $run_filtering = $self->{config}{run_filtering};
     my $log_path = $self->{param}{log_path};
     my $database =$self->{config}{kontaminant_database};
-    my $queue = $self->{config}{queue};
+    my $queue = $self->{config}{filtering_queue};
     my $kontaminant_version = $self->{config}{kontaminant_version};
     my $overwrite = $self->{param}{overwrite};
     my $mem_width = $self->{config}{kontaminant_mem_width};
@@ -1396,6 +1400,7 @@ sub run_kontaminant {
         $opts->{jobname} = "Filter_$jobname";
         $opts->{log} = "$log_path/kontaminant.$scheduler";
         $opts->{memory} = $memory;
+        $opts->{queue} = $queue;
         $opts->{threads} = 1;
         
         my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1649,6 +1654,7 @@ sub run_blastn {
     $opts->{jobname} = "BLASTN_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1706,6 +1712,7 @@ sub run_blastx {
     $opts->{jobname} = "BLASTX_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1763,6 +1770,7 @@ sub run_rapsearch {
     $opts->{jobname} = "RapSearch_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1824,6 +1832,7 @@ sub run_diamond {
     $opts->{jobname} = "Diamond_$jobname";
     $opts->{threads} = $threads;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = "$log_path/".basename($query).".$scheduler";
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1889,11 +1898,21 @@ sub run_megan {
     my $aligner_used = $self->get_aligner_used($alignment_file);
     my $memory = $self->{config}{megan_memory};
     my $display = $self->{config}{megan_display};
+    my $overwrite = $self->{param}{overwrite};
     
     #$self->does_file_exist($fasta_file);
     
     my $meganfile = "$output_dir/megan.rma";
     my $commandfile = "$output_dir/commands.cmds";
+    
+    unless ($overwrite) {
+        if (-e $meganfile) {
+            print "    Found existing MEGAN output\n      $meganfile\n    Skipping MEGAN!\n";
+            return $meganfile;
+        }
+        #else { print "--No existing file found; proceeding with Diamond.\n"; }
+    }
+    
     $self->set_up_megan_command_file($commandfile, $alignment_file, $fasta_file, $meganfile);
     
     my $jobname = basename($self->{param}{output_prefix});
@@ -1903,6 +1922,7 @@ sub run_megan {
     $opts->{jobname} = "MEGAN_$jobname";
     $opts->{threads} = 1;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = $log;
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
@@ -1948,6 +1968,7 @@ sub run_megan_blast2rma {
     $opts->{jobname} = "MEGAN_$jobname";
     $opts->{threads} = 1;
     $opts->{memory} = $memory;
+    $opts->{queue} = $queue;
     $opts->{log} = $log;
     
     my ($outcmd, $jobs) = $self->submit_job($cmd, $opts);
